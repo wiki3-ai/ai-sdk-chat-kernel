@@ -15,7 +15,7 @@ const KERNEL_ID = "http-chat";
 const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
   id: "http-chat-kernel:plugin",
   autoStart: true,
-  activate: (app: JupyterFrontEnd) => {
+  activate: async (app: JupyterFrontEnd) => {
     console.log("[http-chat-kernel] Activating plugin");
 
     const kernelspecs = (app as any).serviceManager?.kernelspecs;
@@ -25,6 +25,21 @@ const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
         kernelspecs
       );
       return;
+    }
+
+    try {
+      const readiness: Promise<unknown>[] = [];
+      if (kernelspecs?.ready) {
+        readiness.push(Promise.resolve(kernelspecs.ready));
+      }
+      if (app.restored) {
+        readiness.push(app.restored);
+      }
+      if (readiness.length) {
+        await Promise.all(readiness);
+      }
+    } catch (err) {
+      console.warn("[http-chat-kernel] Failed waiting for kernelspecs readiness", err);
     }
 
     kernelspecs.register({
