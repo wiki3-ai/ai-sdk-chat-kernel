@@ -1,7 +1,8 @@
 import { JupyterFrontEnd, JupyterFrontEndPlugin } from "@jupyterlab/application";
 import type { IKernel } from "@jupyterlite/kernel";
+import { IKernelSpecs } from "@jupyterlite/kernel";
 
-import { HttpLiteKernel } from "./kernel";
+import { createHttpLiteKernel } from "./kernel";
 import { DEFAULT_WEBLLM_MODEL, WEBLLM_MODELS } from "./models";
 
 declare global {
@@ -15,10 +16,10 @@ const KERNEL_ID = "http-chat";
 const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
   id: "http-chat-kernel:plugin",
   autoStart: true,
-  activate: async (app: JupyterFrontEnd) => {
+  requires: [IKernelSpecs],
+  activate: async (app: JupyterFrontEnd, kernelspecs: IKernelSpecs) => {
     console.log("[http-chat-kernel] Activating plugin");
 
-    const kernelspecs = (app as any).serviceManager?.kernelspecs;
     if (!kernelspecs || typeof kernelspecs.register !== "function") {
       console.warn(
         "[http-chat-kernel] kernelspecs.register is not available; kernel will not be registered.",
@@ -29,8 +30,9 @@ const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
 
     try {
       const readiness: Promise<unknown>[] = [];
-      if (kernelspecs?.ready) {
-        readiness.push(Promise.resolve(kernelspecs.ready));
+      const serviceReady = (app.serviceManager as any)?.ready;
+      if (serviceReady) {
+        readiness.push(Promise.resolve(serviceReady));
       }
       if (app.restored) {
         readiness.push(app.restored);
@@ -43,7 +45,6 @@ const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
     }
 
     kernelspecs.register({
-      id: KERNEL_ID,
       spec: {
         name: KERNEL_ID,
         display_name: "HTTP Chat (ACP)",
@@ -51,9 +52,9 @@ const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
         argv: [],
         resources: {},
       },
-      create: (options: IKernel.IOptions) => {
+      create: async (options: IKernel.IOptions) => {
         console.log("[http-chat-kernel] Creating HttpLiteKernel instance", options);
-        return new HttpLiteKernel(options);
+        return Promise.resolve(createHttpLiteKernel(options as any));
       },
     });
 

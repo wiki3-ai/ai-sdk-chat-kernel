@@ -8,7 +8,13 @@
     "skipLibCheck": true,
     "rootDir": "src",
     "outDir": "lib",
-    "declaration": true
+    "declaration": true,
+    "baseUrl": ".",
+    "paths": {
+      "@jupyterlite/*": ["node_modules/@jupyterlite/*"],
+      "@jupyterlab/*": ["node_modules/@jupyterlab/*"],
+      "@lumino/*": ["node_modules/@lumino/*"]
+    }
   },
   "include": ["src"]
 }
