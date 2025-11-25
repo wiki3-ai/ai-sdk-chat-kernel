@@ -15,6 +15,7 @@ export const WEBLLM_MODELS: string[] = prebuiltAppConfig.model_list.map(
 
 // Preferred defaults in order of choice
 const PREFERRED_DEFAULTS = [
+  "SmolLM2-360M-Instruct-q4f16_1-MLC",
   "Llama-3.2-3B-Instruct-q4f16_1-MLC",
   "Llama-3.1-8B-Instruct-q4f32_1-MLC",
   "Mistral-7B-Instruct-v0.3-q4f16_1-MLC",
