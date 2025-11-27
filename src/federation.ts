@@ -9,7 +9,7 @@ declare const window: any;
 
 console.log("[lite-kernel/federation] Setting up Module Federation container");
 
-const scope = "@wiki3ai/lite-kernel";
+const scope = "lite-kernel";
 let sharedScope: any = null;
 
 // Helper to get a module from the shared scope
