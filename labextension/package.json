@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "jupyterlab": {
     "extension": true,
-    "outputDir": "lite_kernel/labextension",
+    "outputDir": "labextension",
     "sharedPackages": {
       "@jupyterlab/application": {
         "bundled": false,

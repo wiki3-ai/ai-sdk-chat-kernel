@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "files": [
-    "lite_kernel/labextension/**/*"
+    "labextension/**/*"
   ],
   "scripts": {
     "build:ts": "tsc --project tsconfig.json",
@@ -14,8 +14,8 @@
     "build:package": "node -e \"const pkg = require('./package.json'); const fs = require('fs'); fs.writeFileSync('dist/package.json', JSON.stringify({name: pkg.name, version: pkg.version, jupyterlab: pkg.jupyterlab}, null, 2));\"",
     "build": "npm run build:labextension",
     "build:prod": "npm run build:labextension && npm run copy:labextension",
-    "copy:labextension": "mkdir -p lite_kernel/labextension && cp -r dist/* lite_kernel/labextension/ && cp install.json lite_kernel/labextension/",
-    "clean": "rm -rf lib dist lite_kernel/labextension"
+    "copy:labextension": "mkdir -p labextension && cp -r dist/* labextension/ && cp install.json labextension/",
+    "clean": "rm -rf lib dist labextension"
   },
   "dependencies": {
     "@built-in-ai/web-llm": "0.3.1",
@@ -32,7 +32,7 @@
   },
   "jupyterlab": {
     "extension": true,
-    "outputDir": "lite_kernel/labextension",
+    "outputDir": "labextension",
     "sharedPackages": {
       "@jupyterlab/application": {
         "bundled": false,

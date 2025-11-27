@@ -20,20 +20,20 @@ exclude = [
     ".github",
     "node_modules",
 ]
-artifacts = ["lite_kernel/labextension"]
+artifacts = ["labextension"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["lite_kernel"]
-artifacts = ["lite_kernel/labextension"]
+artifacts = ["labextension"]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"lite_kernel/labextension" = "share/jupyter/labextensions/lite-kernel"
+"labextension" = "share/jupyter/labextensions/lite-kernel"
 
 [tool.hatch.build.hooks.jupyter-builder]
 dependencies = ["hatch-jupyter-builder>=0.5"]
 build-function = "hatch_jupyter_builder.npm_builder"
-ensured-targets = ["lite_kernel/labextension/package.json"]
-skip-if-exists = ["lite_kernel/labextension/package.json"]
+ensured-targets = ["labextension/package.json"]
+skip-if-exists = ["labextension/package.json"]
 
 [tool.hatch.build.hooks.jupyter-builder.build-kwargs]
 build_cmd = "build:prod"
