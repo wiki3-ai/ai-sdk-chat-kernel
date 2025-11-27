@@ -1,20 +1,29 @@
 {
   "name": "lite-kernel",
   "version": "1.0.0",
+  "description": "HTTP Chat kernel for JupyterLite with WebLLM support",
   "type": "module",
   "main": "dist/index.js",
+  "files": [
+    "lite_kernel/labextension/**/*"
+  ],
   "scripts": {
     "build:ts": "tsc --project tsconfig.json",
-    "build": "npm run build:ts && esbuild ./lib/federation.js --bundle --format=iife --outfile=dist/index.js",
-    "clean": "rm -rf lib dist"
+    "build:bundle": "esbuild ./lib/federation.js --bundle --format=iife --outfile=dist/index.js",
+    "build:labextension": "npm run build:ts && npm run build:bundle && npm run build:package",
+    "build:package": "node -e \"const pkg = require('./package.json'); const fs = require('fs'); fs.writeFileSync('dist/package.json', JSON.stringify({name: pkg.name, version: pkg.version, jupyterlab: pkg.jupyterlab}, null, 2));\"",
+    "build": "npm run build:labextension",
+    "build:prod": "npm run build:labextension && npm run copy:labextension",
+    "copy:labextension": "mkdir -p lite_kernel/labextension && cp -r dist/* lite_kernel/labextension/ && cp install.json lite_kernel/labextension/",
+    "clean": "rm -rf lib dist lite_kernel/labextension"
   },
   "dependencies": {
     "@built-in-ai/web-llm": "0.3.1",
-    "ai": "5.0.98",
-    "@jupyterlite/kernel": "0.6.4",
-    "@jupyterlab/application": "4.4.5",
-    "@jupyterlab/coreutils": "6.4.5",
-    "@jupyterlab/services": "7.4.5"
+    "@jupyterlab/application": "^4.5.0",
+    "@jupyterlab/coreutils": "^6.5.0",
+    "@jupyterlab/services": "^7.5.0",
+    "@jupyterlite/kernel": "^0.7.0",
+    "ai": "5.0.98"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -23,6 +32,20 @@
   },
   "jupyterlab": {
     "extension": true,
-    "outputDir": "dist"
+    "outputDir": "lite_kernel/labextension",
+    "sharedPackages": {
+      "@jupyterlab/application": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/coreutils": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/services": {
+        "bundled": false,
+        "singleton": true
+      }
+    }
   }
 }
