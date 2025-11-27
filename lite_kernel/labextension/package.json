@@ -1,0 +1,22 @@
+{
+  "name": "lite-kernel",
+  "version": "1.0.0",
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "lite_kernel/labextension",
+    "sharedPackages": {
+      "@jupyterlab/application": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/coreutils": {
+        "bundled": false,
+        "singleton": true
+      },
+      "@jupyterlab/services": {
+        "bundled": false,
+        "singleton": true
+      }
+    }
+  }
+}
