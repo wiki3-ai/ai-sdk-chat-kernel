@@ -1,11 +1,11 @@
-# lite-kernel
+# @wiki3-ai/webllm-chat-kernel
 
-HTTP Chat kernel for JupyterLite with WebLLM support.
+WebLLM chat kernel for JupyterLite using @built-in-ai/web-llm.
 
 ## Installation
 
 ```bash
-pip install lite-kernel
+pip install webllm-chat-kernel
 ```
 
 Or for development:

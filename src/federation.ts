@@ -7,9 +7,9 @@ import { WEBLLM_MODELS, DEFAULT_WEBLLM_MODEL } from "./models.js";
 
 declare const window: any;
 
-console.log("[lite-kernel/federation] Setting up Module Federation container");
+console.log("[webllm-chat-kernel/federation] Setting up Module Federation container");
 
-const scope = "lite-kernel";
+const scope = "@wiki3-ai/webllm-chat-kernel";
 let sharedScope: any = null;
 
 // Helper to get a module from the shared scope
@@ -18,22 +18,22 @@ async function importShared(pkg: string): Promise<any> {
     // Fallback to global webpack share scope if available
     // @ts-ignore
     if (window.__webpack_share_scopes__ && window.__webpack_share_scopes__.default) {
-      console.warn(`[lite-kernel] Using global __webpack_share_scopes__.default for ${pkg}`);
+      console.warn(`[webllm-chat-kernel] Using global __webpack_share_scopes__.default for ${pkg}`);
       // @ts-ignore
       sharedScope = window.__webpack_share_scopes__.default;
     } else {
-      throw new Error(`[lite-kernel] Shared scope not initialized when requesting ${pkg}`);
+      throw new Error(`[webllm-chat-kernel] Shared scope not initialized when requesting ${pkg}`);
     }
   }
 
   const versions = sharedScope[pkg];
   if (!versions) {
-    throw new Error(`[lite-kernel] Shared module ${pkg} not found in shared scope. Available: ${Object.keys(sharedScope)}`);
+    throw new Error(`[webllm-chat-kernel] Shared module ${pkg} not found in shared scope. Available: ${Object.keys(sharedScope)}`);
   }
 
   const versionKeys = Object.keys(versions);
   if (versionKeys.length === 0) {
-    throw new Error(`[lite-kernel] No versions available for ${pkg}`);
+    throw new Error(`[webllm-chat-kernel] No versions available for ${pkg}`);
   }
 
   // Pick the first available version
@@ -41,7 +41,7 @@ async function importShared(pkg: string): Promise<any> {
   const factory = version?.get;
 
   if (typeof factory !== "function") {
-    throw new Error(`[lite-kernel] Module ${pkg} has no factory function`);
+    throw new Error(`[webllm-chat-kernel] Module ${pkg} has no factory function`);
   }
 
   // Factory might return a Promise or the module directly
@@ -57,28 +57,28 @@ async function importShared(pkg: string): Promise<any> {
     result = result();
   }
 
-  console.log(`[lite-kernel] Loaded ${pkg}:`, result);
+  console.log(`[webllm-chat-kernel] Loaded ${pkg}:`, result);
   return result;
 }
 
 // Module Federation container API
 const container = {
   init: (scope: any) => {
-    console.log("[lite-kernel/federation] init() called, storing shared scope");
+    console.log("[webllm-chat-kernel/federation] init() called, storing shared scope");
     sharedScope = scope;
     return Promise.resolve();
   },
 
   get: async (module: string) => {
-    console.log("[lite-kernel/federation] get() called for module:", module);
-    console.log("[lite-kernel/federation] This means JupyterLite is requesting our plugin!");
+    console.log("[webllm-chat-kernel/federation] get() called for module:", module);
+    console.log("[webllm-chat-kernel/federation] This means JupyterLite is requesting our plugin!");
 
     // JupyterLite may request either "./index" or "./extension"
     if (module === "./index" || module === "./extension") {
       // Lazy-load our plugin module, which will pull from shared scope
       return async () => {
-        console.log("[lite-kernel/federation] ===== LOADING PLUGIN MODULE =====");
-        console.log("[lite-kernel/federation] Loading plugins from shared scope...");
+        console.log("[webllm-chat-kernel/federation] ===== LOADING PLUGIN MODULE =====");
+        console.log("[webllm-chat-kernel/federation] Loading plugins from shared scope...");
 
         // Import JupyterLab/JupyterLite modules from shared scope
         const { BaseKernel, IKernelSpecs } = await importShared('@jupyterlite/kernel');
@@ -89,7 +89,7 @@ const container = {
         const { HTMLSelect } = await importShared('@jupyterlab/ui-components');
 
 
-        console.log("[lite-kernel/federation] Got BaseKernel from shared scope:", BaseKernel);
+        console.log("[webllm-chat-kernel/federation] Got BaseKernel from shared scope:", BaseKernel);
 
         // Define WebLLM-backed Chat kernel inline (browser-only, no HTTP)
         class ChatHttpKernel {
@@ -130,7 +130,7 @@ const container = {
             });
           }
 
-          async send(prompt: string): Promise<string> {
+          async send(prompt: string, onChunk?: (chunk: string) => void): Promise<string> {
             // Pick up any model change from the toolbar before each request
             this.ensureModelUpToDate();
             console.log(
@@ -162,6 +162,9 @@ const container = {
             let reply = "";
             for await (const chunk of result.textStream) {
               reply += chunk;
+              if (onChunk) {
+                onChunk(chunk);
+              }
             }
 
             console.log("[ChatHttpKernel] Got reply from WebLLM:", reply);
@@ -182,18 +185,16 @@ const container = {
           async executeRequest(content: any): Promise<any> {
             const code = String(content.code ?? "");
             try {
-              const reply = await this.chat.send(code);
-              // @ts-ignore
-              this.publishExecuteResult(
-                {
-                  data: { "text/plain": reply },
-                  metadata: {},
-                  // @ts-ignore
-                  execution_count: this.executionCount,
-                },
+              // Stream each chunk as it arrives using the stream() method for stdout
+              await this.chat.send(code, (chunk: string) => {
                 // @ts-ignore
-                this.parentHeader
-              );
+                this.stream(
+                  { name: "stdout", text: chunk },
+                  // @ts-ignore
+                  this.parentHeader
+                );
+              });
+
               return {
                 status: "ok",
                 // @ts-ignore
@@ -279,41 +280,41 @@ const container = {
 
         // Define and return the plugin
         const httpChatKernelPlugin = {
-          id: "http-chat-kernel:plugin",
+          id: "webllm-chat-kernel:plugin",
           autoStart: true,
           // Match the official JupyterLite custom kernel pattern:
           // https://jupyterlite.readthedocs.io/en/latest/howto/extensions/kernel.html
           requires: [IKernelSpecs],
           activate: (app: any, kernelspecs: any) => {
-            console.log("[http-chat-kernel] ===== ACTIVATE FUNCTION CALLED =====");
-            console.log("[http-chat-kernel] JupyterLab app:", app);
-            console.log("[http-chat-kernel] kernelspecs service:", kernelspecs);
+            console.log("[webllm-chat-kernel] ===== ACTIVATE FUNCTION CALLED =====");
+            console.log("[webllm-chat-kernel] JupyterLab app:", app);
+            console.log("[webllm-chat-kernel] kernelspecs service:", kernelspecs);
 
             if (!kernelspecs || typeof kernelspecs.register !== "function") {
-              console.error("[http-chat-kernel] ERROR: kernelspecs.register not available!");
+              console.error("[webllm-chat-kernel] ERROR: kernelspecs.register not available!");
               return;
             }
 
             try {
               kernelspecs.register({
                 spec: {
-                  name: "http-chat",
-                  display_name: "HTTP Chat (ACP)",
+                  name: "webllm-chat",
+                  display_name: "WebLLM Chat",
                   language: "python",
                   argv: [],
                   resources: {},
                 },
                 create: async (options: any) => {
-                  console.log("[http-chat-kernel] Creating HttpLiteKernel instance", options);
+                  console.log("[webllm-chat-kernel] Creating HttpLiteKernel instance", options);
                   return new HttpLiteKernel(options);
                 },
               });
 
-              console.log("[http-chat-kernel] ===== KERNEL REGISTERED SUCCESSFULLY =====");
-              console.log("[http-chat-kernel] Kernel name: http-chat");
-              console.log("[http-chat-kernel] Display name: HTTP Chat (ACP)");
+              console.log("[webllm-chat-kernel] ===== KERNEL REGISTERED SUCCESSFULLY =====");
+              console.log("[webllm-chat-kernel] Kernel name: webllm-chat");
+              console.log("[webllm-chat-kernel] Display name: WebLLM Chat");
             } catch (error) {
-              console.error("[http-chat-kernel] ===== REGISTRATION ERROR =====", error);
+              console.error("[webllm-chat-kernel] ===== REGISTRATION ERROR =====", error);
             }
 
             if (typeof document !== "undefined") {
@@ -394,10 +395,10 @@ const container = {
         };
 
         const plugins = [httpChatKernelPlugin];
-        console.log("[lite-kernel/federation] ===== PLUGIN CREATED SUCCESSFULLY =====");
-        console.log("[lite-kernel/federation] Plugin ID:", httpChatKernelPlugin.id);
-        console.log("[lite-kernel/federation] Plugin autoStart:", httpChatKernelPlugin.autoStart);
-        console.log("[lite-kernel/federation] Returning plugins array:", plugins);
+        console.log("[webllm-chat-kernel/federation] ===== PLUGIN CREATED SUCCESSFULLY =====");
+        console.log("[webllm-chat-kernel/federation] Plugin ID:", httpChatKernelPlugin.id);
+        console.log("[webllm-chat-kernel/federation] Plugin autoStart:", httpChatKernelPlugin.autoStart);
+        console.log("[webllm-chat-kernel/federation] Returning plugins array:", plugins);
 
         // IMPORTANT: Shape the exports like a real federated ES module
         // so JupyterLite's loader sees our plugins. It checks for
@@ -411,7 +412,7 @@ const container = {
       };
     }
 
-    throw new Error(`[lite-kernel/federation] Unknown module: ${module}`);
+    throw new Error(`[webllm-chat-kernel/federation] Unknown module: ${module}`);
   }
 };
 
@@ -419,4 +420,4 @@ const container = {
 window._JUPYTERLAB = window._JUPYTERLAB || {};
 window._JUPYTERLAB[scope] = container;
 
-console.log("[lite-kernel/federation] Registered Module Federation container for scope:", scope);
+console.log("[webllm-chat-kernel/federation] Registered Module Federation container for scope:", scope);

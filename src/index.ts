@@ -3,7 +3,7 @@ import { WEBLLM_MODELS, DEFAULT_WEBLLM_MODEL } from "./models.js";
 
 import { HttpLiteKernel } from "./kernel.js";
 
-console.log("[lite-kernel] entrypoint loaded");
+console.log("[webllm-chat-kernel] entrypoint loaded");
 
 declare global {
   interface Window {
@@ -14,14 +14,14 @@ declare global {
 }
 
 /**
- * JupyterLite / JupyterLab plugin that registers our HTTP-backed kernel.
+ * JupyterLite / JupyterLab plugin that registers our WebLLM-backed kernel.
  */
 const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
-  id: "http-chat-kernel:plugin",
+  id: "webllm-chat-kernel:plugin",
   autoStart: true,
   // ❌ remove `requires: [IKernelSpecs]`,
   activate: (app: JupyterFrontEnd) => {
-    console.log("[http-chat-kernel] Activating plugin");
+    console.log("[webllm-chat-kernel] Activating plugin");
 
     // Grab kernelspecs from the app's serviceManager
     const anyApp = app as any;
@@ -29,28 +29,28 @@ const httpChatKernelPlugin: JupyterFrontEndPlugin<void> = {
 
     if (!kernelspecs || typeof kernelspecs.register !== "function") {
       console.warn(
-        "[http-chat-kernel] kernelspecs.register is not available; kernel will not be registered.",
+        "[webllm-chat-kernel] kernelspecs.register is not available; kernel will not be registered.",
         kernelspecs
       );
       return;
     }
 
     kernelspecs.register({
-      id: "http-chat",
+      id: "webllm-chat",
       spec: {
-        name: "http-chat",
-        display_name: "HTTP Chat (ACP)",
+        name: "webllm-chat",
+        display_name: "WebLLM Chat",
         language: "python", // purely cosmetic; syntax highlighting
         argv: [],
         resources: {}
       },
       create: (options: any) => {
-        console.log("[http-chat-kernel] Creating HttpLiteKernel instance", options);
+        console.log("[webllm-chat-kernel] Creating HttpLiteKernel instance", options);
         return new HttpLiteKernel(options);
       }
     });
 
-    console.log("[http-chat-kernel] Kernel spec 'http-chat' registered");
+    console.log("[webllm-chat-kernel] Kernel spec 'webllm-chat' registered");
 
     // --- WebLLM model selector + progress bar ---
     if (typeof document !== "undefined") {
@@ -119,7 +119,7 @@ export default plugins;
 
 // --- manual MF shim for static usage ---
 if (typeof window !== "undefined") {
-  const scope = "@wiki3ai/lite-kernel";
+  const scope = "@wiki3-ai/webllm-chat-kernel";
   const moduleFactories: Record<string, () => any> = {
     "./index": () => ({ default: plugins }),
     "./extension": () => ({ default: plugins })
@@ -132,7 +132,7 @@ if (typeof window !== "undefined") {
       get: (module: string) => {
         const factory = moduleFactories[module];
         if (!factory) {
-          return Promise.reject(new Error(`[lite-kernel] Unknown module: ${module}`));
+          return Promise.reject(new Error(`[webllm-chat-kernel] Unknown module: ${module}`));
         }
         return Promise.resolve(factory);
       },
@@ -140,11 +140,11 @@ if (typeof window !== "undefined") {
         const scopeData = shareScope ?? {};
         const globalShare = window.__JUPYTERLITE_SHARED_SCOPE__ ||= {};
         Object.assign(globalShare, scopeData);
-        console.log("[lite-kernel] Module federation shim init() with shared scope keys", Object.keys(scopeData));
+        console.log("[webllm-chat-kernel] Module federation shim init() with shared scope keys", Object.keys(scopeData));
         return Promise.resolve();
       }
     };
 
-      console.log(`[lite-kernel] Registered manual Module Federation shim on window._JUPYTERLAB scope='${scope}'`);
+      console.log(`[webllm-chat-kernel] Registered manual Module Federation shim on window._JUPYTERLAB scope='${scope}'`);
   }
 }

@@ -21,15 +21,14 @@ export class HttpLiteKernel extends BaseKernel {
   async executeRequest(content: any): Promise<any> {
     const code = String(content.code ?? "");
     try {
-      const reply = await this.chat.send(code);
-      this.publishExecuteResult(
-        {
-          data: { "text/plain": reply },
-          metadata: {},
-          execution_count: this.executionCount,
-        },
-        this.parentHeader
-      );
+      // Stream each chunk as it arrives using the stream() method for stdout
+      await this.chat.send(code, (chunk: string) => {
+        this.stream(
+          { name: "stdout", text: chunk },
+          this.parentHeader
+        );
+      });
+
       return {
         status: "ok",
         execution_count: this.executionCount,
@@ -60,7 +59,7 @@ export class HttpLiteKernel extends BaseKernel {
     return {
       status: "ok",
       protocol_version: "5.3",
-      implementation: "http-lite-kernel",
+      implementation: "webllm-chat-kernel",
       implementation_version: "0.1.0",
       language_info: {
         name: "markdown",
@@ -68,7 +67,7 @@ export class HttpLiteKernel extends BaseKernel {
         mimetype: "text/markdown",
         file_extension: ".md",
       },
-      banner: "HTTP-backed LLM chat kernel",
+      banner: "WebLLM chat kernel using @built-in-ai/web-llm",
       help_links: [],
     };
   }

@@ -37,7 +37,13 @@ export class ChatHttpKernel {
     console.log("[ChatHttpKernel] Using WebLLM model:", this.modelName);
   }
 
-  async send(prompt: string): Promise<string> {
+  /**
+   * Send a prompt and stream the response.
+   * @param prompt The user prompt
+   * @param onChunk Optional callback invoked for each chunk of text as it arrives
+   * @returns The full response text
+   */
+  async send(prompt: string, onChunk?: (chunk: string) => void): Promise<string> {
     const availability = await this.model.availability();
     if (availability === "unavailable") {
       throw new Error("Browser does not support WebLLM / WebGPU.");
@@ -60,6 +66,9 @@ export class ChatHttpKernel {
     let reply = "";
     for await (const chunk of result.textStream) {
       reply += chunk;
+      if (onChunk) {
+        onChunk(chunk);
+      }
     }
     return reply;
   }
