@@ -1,6 +1,6 @@
 # @wiki3-ai/webllm-chat-kernel
 
-WebLLM chat kernel for JupyterLite using @built-in-ai/web-llm.
+WebLLM chat kernel for JupyterLite using @mlc-ai/web-llm.
 
 ## Installation
 

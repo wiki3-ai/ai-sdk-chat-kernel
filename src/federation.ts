@@ -1,8 +1,7 @@
 // src/federation.ts
 // Module Federation container for JupyterLite
 
-import { streamText } from "ai";
-import { webLLM } from "@built-in-ai/web-llm";
+import { CreateMLCEngine, type MLCEngineInterface, type InitProgressReport } from "@mlc-ai/web-llm";
 import { WEBLLM_MODELS, DEFAULT_WEBLLM_MODEL, isValidWebLLMModel } from "./models.js";
 
 declare const window: any;
@@ -105,8 +104,9 @@ const container = {
         // Define WebLLM-backed Chat kernel inline (browser-only, no HTTP)
         class WebLLMChatKernel {
           private modelName: string | null = null;
-          private model: ReturnType<typeof webLLM> | null = null;
+          private engine: MLCEngineInterface | null = null;
           private initialized: boolean = false;
+          private initializationPromise: Promise<void> | null = null;
 
           constructor() {
             // Model initialization is deferred until first send() call
@@ -116,36 +116,64 @@ const container = {
           /**
            * Initialize the model. Called on first send() or when explicitly setting a model.
            */
-          private initializeModel(modelName: string) {
+          private async initializeModel(modelName: string): Promise<void> {
             if (!isValidWebLLMModel(modelName)) {
-              throw new Error(`Invalid model: ${modelName}. Use %ai model to see available models.`);
+              throw new Error(`Invalid model: ${modelName}. Use %chat list to see available models.`);
             }
-            
+
+            // If already initializing the same model, wait for that
+            if (this.initializationPromise && this.modelName === modelName) {
+              await this.initializationPromise;
+              return;
+            }
+
+            // If initializing a different model, wait for current initialization to complete first
+            if (this.initializationPromise) {
+              await this.initializationPromise;
+            }
+
             this.modelName = modelName;
-            this.model = webLLM(this.modelName, {
-              initProgressCallback: (report) => {
-                if (typeof window !== "undefined") {
-                  window.dispatchEvent(
-                    new CustomEvent("webllm:model-progress", { detail: report })
-                  );
-                }
-              },
+            
+            const initProgressCallback = (report: InitProgressReport) => {
+              if (typeof window !== "undefined") {
+                window.dispatchEvent(
+                  new CustomEvent("webllm:model-progress", { detail: report })
+                );
+              }
+            };
+
+            this.initializationPromise = CreateMLCEngine(this.modelName, {
+              initProgressCallback,
+            }).then((engine: MLCEngineInterface) => {
+              this.engine = engine;
+              this.initialized = true;
+              console.log("[WebLLMChatKernel] Initialized with model:", this.modelName);
             });
-            this.initialized = true;
-            console.log("[WebLLMChatKernel] Initialized with model:", this.modelName);
+
+            await this.initializationPromise;
+            this.initializationPromise = null;
           }
 
           /**
-           * Set or change the model. Can be called via %ai model magic.
+           * Set or change the model. Can be called via %chat model magic.
            * If the model is already initialized, this will reinitialize with the new model.
            */
-          setModel(modelName: string): string {
+          async setModel(modelName: string): Promise<string> {
             if (!isValidWebLLMModel(modelName)) {
               throw new Error(`Invalid model: ${modelName}`);
             }
             
             const wasInitialized = this.initialized;
-            this.initializeModel(modelName);
+            
+            // Unload previous model if any
+            if (this.engine) {
+              await this.engine.unload();
+              this.engine = null;
+              this.initialized = false;
+              this.initializationPromise = null;
+            }
+
+            await this.initializeModel(modelName);
             
             if (wasInitialized) {
               return `Model changed to: ${modelName}`;
@@ -170,10 +198,15 @@ const container = {
 
           async send(prompt: string, onChunk?: (chunk: string) => void): Promise<string> {
             // Initialize model on first send if not already done
-            if (!this.initialized || !this.model) {
+            if (!this.initialized || !this.engine) {
               const defaultModel = getDefaultModel();
-              this.initializeModel(defaultModel);
+              await this.initializeModel(defaultModel);
               console.log("[WebLLMChatKernel] Auto-initialized with settings default:", defaultModel);
+            }
+
+            // After initialization, engine should be available
+            if (!this.engine) {
+              throw new Error("Failed to initialize WebLLM engine");
             }
 
             console.log(
@@ -183,30 +216,20 @@ const container = {
               this.modelName
             );
 
-            const availability = await this.model!.availability();
-            if (availability === "unavailable") {
-              throw new Error("Browser does not support WebLLM / WebGPU.");
-            }
-            if (availability === "downloadable" || availability === "downloading") {
-              await this.model!.createSessionWithProgress((report) => {
-                if (typeof window !== "undefined") {
-                  window.dispatchEvent(
-                    new CustomEvent("webllm:model-progress", { detail: report })
-                  );
-                }
-              });
-            }
-
-            const result = await streamText({
-              model: this.model!,
+            // Use the streaming chat completion API
+            const stream = await this.engine.chat.completions.create({
               messages: [{ role: "user", content: prompt }],
+              stream: true,
             });
 
             let reply = "";
-            for await (const chunk of result.textStream) {
-              reply += chunk;
-              if (onChunk) {
-                onChunk(chunk);
+            for await (const chunk of stream) {
+              const content = chunk.choices?.[0]?.delta?.content || "";
+              if (content) {
+                reply += content;
+                if (onChunk) {
+                  onChunk(content);
+                }
               }
             }
 
@@ -225,10 +248,10 @@ const container = {
           }
 
           /**
-           * Handle %ai magic commands.
+           * Handle %chat magic commands.
            * Returns the response text if a magic was handled, or null if not a magic command.
            */
-          private handleMagic(code: string): string | null {
+          private async handleMagic(code: string): Promise<string | null> {
             const trimmed = code.trim();
             
             // %chat list [filter] - list all models, optionally filtered
@@ -263,7 +286,7 @@ const container = {
             if (modelMatch) {
               const modelName = modelMatch[1];
               try {
-                const result = this.chat.setModel(modelName);
+                const result = await this.chat.setModel(modelName);
                 return result;
               } catch (err: any) {
                 throw new Error(`${err.message}\n\nUse "%chat list" to see available models.`);
@@ -291,7 +314,7 @@ After initialization, use "%chat model <name>" to switch models.`;
             const code = String(content.code ?? "");
             try {
               // Check for magic commands first
-              const magicResult = this.handleMagic(code);
+              const magicResult = await this.handleMagic(code);
               if (magicResult !== null) {
                 // @ts-ignore
                 this.stream(
