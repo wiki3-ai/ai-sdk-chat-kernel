@@ -279,7 +279,7 @@ const container = {
         }
 
         // Define and return the plugin
-        const httpChatKernelPlugin = {
+        const webllmChatKernelPlugin = {
           id: "webllm-chat-kernel:plugin",
           autoStart: true,
           // Match the official JupyterLite custom kernel pattern:
@@ -394,10 +394,10 @@ const container = {
           },
         };
 
-        const plugins = [httpChatKernelPlugin];
+        const plugins = [webllmChatKernelPlugin];
         console.log("[webllm-chat-kernel/federation] ===== PLUGIN CREATED SUCCESSFULLY =====");
-        console.log("[webllm-chat-kernel/federation] Plugin ID:", httpChatKernelPlugin.id);
-        console.log("[webllm-chat-kernel/federation] Plugin autoStart:", httpChatKernelPlugin.autoStart);
+        console.log("[webllm-chat-kernel/federation] Plugin ID:", webllmChatKernelPlugin.id);
+        console.log("[webllm-chat-kernel/federation] Plugin autoStart:", webllmChatKernelPlugin.autoStart);
         console.log("[webllm-chat-kernel/federation] Returning plugins array:", plugins);
 
         // IMPORTANT: Shape the exports like a real federated ES module
