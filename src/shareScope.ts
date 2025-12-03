@@ -17,7 +17,7 @@ export function setSharedScope(scope: any) {
 
 function ensureScope(): any {
   if (!sharedScope) {
-    throw new Error("[lite-kernel] Shared scope has not been initialised");
+    throw new Error("[webllm-chat-kernel] Shared scope has not been initialised");
   }
   return sharedScope;
 }
@@ -26,20 +26,20 @@ export function getSharedModule<T = any>(moduleName: string): T {
   const scope = ensureScope();
   const versions = scope[moduleName];
   if (!versions) {
-    throw new Error(`[lite-kernel] Module ${moduleName} not found in shared scope`);
+    throw new Error(`[webllm-chat-kernel] Module ${moduleName} not found in shared scope`);
   }
   const versionKeys = Object.keys(versions);
   if (versionKeys.length === 0) {
-    throw new Error(`[lite-kernel] No versions available for ${moduleName}`);
+    throw new Error(`[webllm-chat-kernel] No versions available for ${moduleName}`);
   }
   const selected = versions[versionKeys[0]];
   const factory = selected?.get;
   if (typeof factory !== "function") {
-    throw new Error(`[lite-kernel] Shared module ${moduleName} missing factory`);
+    throw new Error(`[webllm-chat-kernel] Shared module ${moduleName} missing factory`);
   }
   const moduleExports = factory();
   if (moduleExports && typeof (moduleExports as Promise<any>).then === "function") {
-    throw new Error("[lite-kernel] Async shared modules are not supported");
+    throw new Error("[webllm-chat-kernel] Async shared modules are not supported");
   }
   return moduleExports as T;
 }

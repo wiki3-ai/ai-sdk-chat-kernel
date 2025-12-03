@@ -1,4 +1,4 @@
-// lite-kernel/src/models.ts
+// src/models.ts
 // Dynamically derive the list of WebLLM models from upstream WebLLM.
 //
 // NOTE:

@@ -11,7 +11,6 @@ pip install webllm-chat-kernel
 Or for development:
 
 ```bash
-cd lite-kernel
 pip install -e .
 ```
 

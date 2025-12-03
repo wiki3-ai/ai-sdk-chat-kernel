@@ -1,4 +1,4 @@
-// lite-kernel/src/federation.ts
+// src/federation.ts
 // Module Federation container for JupyterLite
 
 import { streamText } from "ai";
@@ -92,7 +92,7 @@ const container = {
         console.log("[webllm-chat-kernel/federation] Got BaseKernel from shared scope:", BaseKernel);
 
         // Define WebLLM-backed Chat kernel inline (browser-only, no HTTP)
-        class ChatHttpKernel {
+        class WebLLMChatKernel {
           private modelName!: string;
           private model!: ReturnType<typeof webLLM>;
           private readonly initialModelOverride?: string;
@@ -100,7 +100,7 @@ const container = {
           constructor(opts: any = {}) {
             this.initialModelOverride = opts.model;
             this.ensureModelUpToDate();
-            console.log("[ChatHttpKernel] Using WebLLM model:", this.modelName);
+            console.log("[WebLLMChatKernel] Using WebLLM model:", this.modelName);
           }
 
           /**
@@ -134,7 +134,7 @@ const container = {
             // Pick up any model change from the toolbar before each request
             this.ensureModelUpToDate();
             console.log(
-              "[ChatHttpKernel] Sending prompt to WebLLM:",
+              "[WebLLMChatKernel] Sending prompt to WebLLM:",
               prompt,
               "using model:",
               this.modelName
@@ -167,19 +167,19 @@ const container = {
               }
             }
 
-            console.log("[ChatHttpKernel] Got reply from WebLLM:", reply);
+            console.log("[WebLLMChatKernel] Got reply from WebLLM:", reply);
             return reply;
           }
         }
 
-        // Define HttpLiteKernel extending BaseKernel
-        class HttpLiteKernel extends BaseKernel {
-          private chat: ChatHttpKernel;
+        // Define WebLLMLiteKernel extending BaseKernel
+        class WebLLMLiteKernel extends BaseKernel {
+          private chat: WebLLMChatKernel;
 
           constructor(options: any) {
             super(options);
             const model = options.model;
-            this.chat = new ChatHttpKernel({ model });
+            this.chat = new WebLLMChatKernel({ model });
           }
 
           async executeRequest(content: any): Promise<any> {
@@ -279,7 +279,7 @@ const container = {
         }
 
         // Define and return the plugin
-        const httpChatKernelPlugin = {
+        const webllmChatKernelPlugin = {
           id: "webllm-chat-kernel:plugin",
           autoStart: true,
           // Match the official JupyterLite custom kernel pattern:
@@ -305,8 +305,8 @@ const container = {
                   resources: {},
                 },
                 create: async (options: any) => {
-                  console.log("[webllm-chat-kernel] Creating HttpLiteKernel instance", options);
-                  return new HttpLiteKernel(options);
+                  console.log("[webllm-chat-kernel] Creating WebLLMLiteKernel instance", options);
+                  return new WebLLMLiteKernel(options);
                 },
               });
 
@@ -394,10 +394,10 @@ const container = {
           },
         };
 
-        const plugins = [httpChatKernelPlugin];
+        const plugins = [webllmChatKernelPlugin];
         console.log("[webllm-chat-kernel/federation] ===== PLUGIN CREATED SUCCESSFULLY =====");
-        console.log("[webllm-chat-kernel/federation] Plugin ID:", httpChatKernelPlugin.id);
-        console.log("[webllm-chat-kernel/federation] Plugin autoStart:", httpChatKernelPlugin.autoStart);
+        console.log("[webllm-chat-kernel/federation] Plugin ID:", webllmChatKernelPlugin.id);
+        console.log("[webllm-chat-kernel/federation] Plugin autoStart:", webllmChatKernelPlugin.autoStart);
         console.log("[webllm-chat-kernel/federation] Returning plugins array:", plugins);
 
         // IMPORTANT: Shape the exports like a real federated ES module
