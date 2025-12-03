@@ -95,7 +95,7 @@ const container = {
         const { BaseKernel, IKernelSpecs } = await importShared('@jupyterlite/kernel');
         const { Widget } = await importShared('@lumino/widgets');
 
-        const { ReactWidget } = await importShared('@jupyterlab/apputils');
+        const { ReactWidget, showDialog, Dialog } = await importShared('@jupyterlab/apputils');
         const React = await importShared('react');
         const { HTMLSelect } = await importShared('@jupyterlab/ui-components');
 
@@ -231,37 +231,57 @@ const container = {
           private handleMagic(code: string): string | null {
             const trimmed = code.trim();
             
-            // %ai model [name] - show current model, list models, or set model
-            if (trimmed === "%ai model" || trimmed === "%ai models") {
+            // %chat list [filter] - list all models, optionally filtered
+            const listMatch = trimmed.match(/^%chat\s+list(?:\s+(.+))?$/);
+            if (listMatch || trimmed === "%chat list") {
+              const filter = listMatch?.[1]?.toLowerCase() || "";
+              const filtered = filter 
+                ? WEBLLM_MODELS.filter(m => m.toLowerCase().includes(filter))
+                : WEBLLM_MODELS;
+              
+              if (filtered.length === 0) {
+                return `No models found matching "${filter}".\n\nUse "%chat list" to see all ${WEBLLM_MODELS.length} available models.`;
+              }
+              
+              const modelList = filtered.join("\n  ");
+              const header = filter 
+                ? `Models matching "${filter}" (${filtered.length} of ${WEBLLM_MODELS.length}):`
+                : `All available models (${WEBLLM_MODELS.length}):`;
+              return `${header}\n  ${modelList}\n\nUse "%chat model <name>" to switch models.`;
+            }
+            
+            // %chat model [name] - show current model or set model
+            if (trimmed === "%chat model" || trimmed === "%chat models") {
               const current = this.chat.getModelName();
               const status = this.chat.isInitialized() 
                 ? `Current model: ${current}` 
                 : `Model not yet initialized. Default: ${getDefaultModel()}`;
-              const modelList = WEBLLM_MODELS.slice(0, 20).join("\n  ");
-              return `${status}\n\nAvailable models (showing first 20 of ${WEBLLM_MODELS.length}):\n  ${modelList}\n  ...\n\nUse "%ai model <name>" to switch models.`;
+              return `${status}\n\nUse "%chat list" to see all available models.\nUse "%chat list <filter>" to filter by name (e.g., "%chat list llama").\nUse "%chat model <name>" to switch models.`;
             }
             
-            const modelMatch = trimmed.match(/^%ai\s+model\s+(\S+)$/);
+            const modelMatch = trimmed.match(/^%chat\s+model\s+(\S+)$/);
             if (modelMatch) {
               const modelName = modelMatch[1];
               try {
                 const result = this.chat.setModel(modelName);
                 return result;
               } catch (err: any) {
-                throw new Error(`${err.message}\n\nUse "%ai model" to see available models.`);
+                throw new Error(`${err.message}\n\nUse "%chat list" to see available models.`);
               }
             }
             
-            // %ai help
-            if (trimmed === "%ai" || trimmed === "%ai help") {
+            // %chat help
+            if (trimmed === "%chat" || trimmed === "%chat help") {
               return `WebLLM Chat Kernel Magic Commands:
 
-  %ai model          - Show current model and list available models
-  %ai model <name>   - Switch to a different model
-  %ai help           - Show this help message
+  %chat model            - Show current model
+  %chat model <name>     - Switch to a different model
+  %chat list             - List all available models
+  %chat list <filter>    - List models matching filter (e.g., "%chat list llama")
+  %chat help             - Show this help message
 
 The model is initialized on first cell execution using the default from Settings.
-After initialization, use "%ai model <name>" to switch models.`;
+After initialization, use "%chat model <name>" to switch models.`;
             }
             
             return null; // Not a magic command
@@ -390,6 +410,16 @@ After initialization, use "%ai model <name>" to switch models.`;
           console.warn("[webllm-chat-kernel] ISettingRegistry not available, using defaults");
         }
 
+        // Try to get IFormRendererRegistry from shared scope (optional)
+        let IFormRendererRegistry: any = null;
+        try {
+          const uiModule = await importShared('@jupyterlab/ui-components');
+          IFormRendererRegistry = uiModule.IFormRendererRegistry;
+          console.log("[webllm-chat-kernel] Got IFormRendererRegistry from shared scope");
+        } catch (e) {
+          console.warn("[webllm-chat-kernel] IFormRendererRegistry not available");
+        }
+
         // Define and return the plugin
         const webllmChatKernelPlugin = {
           id: "@wiki3-ai/webllm-chat-kernel:plugin",
@@ -397,12 +427,13 @@ After initialization, use "%ai model <name>" to switch models.`;
           // Match the official JupyterLite custom kernel pattern:
           // https://jupyterlite.readthedocs.io/en/latest/howto/extensions/kernel.html
           requires: [IKernelSpecs],
-          optional: ISettingRegistry ? [ISettingRegistry] : [],
-          activate: async (app: any, kernelspecs: any, settingRegistry?: any) => {
+          optional: [ISettingRegistry, IFormRendererRegistry].filter(Boolean),
+          activate: async (app: any, kernelspecs: any, settingRegistry?: any, formRendererRegistry?: any) => {
             console.log("[webllm-chat-kernel] ===== ACTIVATE FUNCTION CALLED =====");
             console.log("[webllm-chat-kernel] JupyterLab app:", app);
             console.log("[webllm-chat-kernel] kernelspecs service:", kernelspecs);
             console.log("[webllm-chat-kernel] settingRegistry:", settingRegistry);
+            console.log("[webllm-chat-kernel] formRendererRegistry:", formRendererRegistry);
 
             // Load settings if available
             if (settingRegistry) {
@@ -419,6 +450,150 @@ After initialization, use "%ai model <name>" to switch models.`;
                 settings.changed.connect(updateSettings);
               } catch (e) {
                 console.warn("[webllm-chat-kernel] Failed to load settings:", e);
+              }
+            }
+
+            // Register custom form renderer for the model selection dropdown
+            if (formRendererRegistry) {
+              try {
+                const PLUGIN_ID = "@wiki3-ai/webllm-chat-kernel:plugin";
+                const ModelSelectorField = (props: any) => {
+                  const { schema, formData, onChange } = props;
+                  const [filterText, setFilterText] = React.useState('');
+                  const [isOpen, setIsOpen] = React.useState(false);
+                  const containerRef = React.useRef(null);
+                  
+                  // Filter models based on search text
+                  const filteredModels = React.useMemo(() => {
+                    if (!filterText) return WEBLLM_MODELS;
+                    const lower = filterText.toLowerCase();
+                    return WEBLLM_MODELS.filter((m: string) => m.toLowerCase().includes(lower));
+                  }, [filterText]);
+
+                  // Handle click outside to close dropdown
+                  React.useEffect(() => {
+                    const handleClickOutside = (event: MouseEvent) => {
+                      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+                        setIsOpen(false);
+                      }
+                    };
+                    document.addEventListener('mousedown', handleClickOutside);
+                    return () => document.removeEventListener('mousedown', handleClickOutside);
+                  }, []);
+
+                  const handleSelect = (model: string) => {
+                    onChange(model);
+                    setIsOpen(false);
+                    setFilterText('');
+                  };
+
+                  return React.createElement('div', { 
+                    className: 'jp-FormGroup-contentNormal',
+                    style: { position: 'relative' }
+                  },
+                    React.createElement('h3', { 
+                      className: 'jp-FormGroup-fieldLabel jp-FormGroup-contentItem' 
+                    }, schema.title || 'Default Model'),
+                    schema.description && React.createElement('div', { 
+                      className: 'jp-FormGroup-description' 
+                    }, schema.description),
+                    React.createElement('div', { 
+                      ref: containerRef,
+                      style: { position: 'relative' } 
+                    },
+                      // Input field showing current value, acts as search when open
+                      React.createElement('input', {
+                        type: 'text',
+                        className: 'jp-mod-styled',
+                        style: { 
+                          width: '100%', 
+                          padding: '4px 8px',
+                          boxSizing: 'border-box'
+                        },
+                        value: isOpen ? filterText : (formData || ''),
+                        placeholder: isOpen ? 'Type to filter models...' : 'Click to select a model',
+                        onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+                          if (isOpen) {
+                            setFilterText(e.target.value);
+                          }
+                        },
+                        onFocus: () => setIsOpen(true),
+                        onKeyDown: (e: React.KeyboardEvent) => {
+                          if (e.key === 'Escape') {
+                            setIsOpen(false);
+                            setFilterText('');
+                          } else if (e.key === 'Enter' && filteredModels.length > 0) {
+                            handleSelect(filteredModels[0]);
+                          }
+                        }
+                      }),
+                      // Dropdown list
+                      isOpen && React.createElement('div', {
+                        style: {
+                          position: 'absolute',
+                          top: '100%',
+                          left: 0,
+                          right: 0,
+                          maxHeight: '300px',
+                          overflowY: 'auto',
+                          backgroundColor: 'var(--jp-layout-color1)',
+                          border: '1px solid var(--jp-border-color1)',
+                          borderRadius: '2px',
+                          zIndex: 1000,
+                          boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
+                        }
+                      },
+                        filteredModels.length === 0 
+                          ? React.createElement('div', {
+                              style: { 
+                                padding: '8px 12px', 
+                                color: 'var(--jp-ui-font-color2)',
+                                fontStyle: 'italic'
+                              }
+                            }, 'No matching models')
+                          : filteredModels.map((model: string, index: number) => 
+                              React.createElement('div', {
+                                key: model,
+                                style: {
+                                  padding: '6px 12px',
+                                  cursor: 'pointer',
+                                  backgroundColor: model === formData 
+                                    ? 'var(--jp-brand-color3)' 
+                                    : 'transparent',
+                                  borderBottom: index < filteredModels.length - 1 
+                                    ? '1px solid var(--jp-border-color2)' 
+                                    : 'none'
+                                },
+                                onMouseEnter: (e: React.MouseEvent<HTMLDivElement>) => {
+                                  (e.target as HTMLDivElement).style.backgroundColor = 'var(--jp-layout-color2)';
+                                },
+                                onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
+                                  (e.target as HTMLDivElement).style.backgroundColor = 
+                                    model === formData ? 'var(--jp-brand-color3)' : 'transparent';
+                                },
+                                onClick: () => handleSelect(model)
+                              }, model)
+                            )
+                      )
+                    ),
+                    // Show current selection below
+                    formData && React.createElement('div', {
+                      style: { 
+                        marginTop: '4px', 
+                        fontSize: '12px',
+                        color: 'var(--jp-ui-font-color2)'
+                      }
+                    }, `Selected: ${formData}`)
+                  );
+                };
+
+                formRendererRegistry.addRenderer(
+                  `${PLUGIN_ID}.defaultModel`,
+                  { fieldRenderer: ModelSelectorField }
+                );
+                console.log("[webllm-chat-kernel] Registered custom model selector renderer");
+              } catch (e) {
+                console.warn("[webllm-chat-kernel] Failed to register form renderer:", e);
               }
             }
 
@@ -447,6 +622,191 @@ After initialization, use "%ai model <name>" to switch models.`;
               console.log("[webllm-chat-kernel] Display name: WebLLM Chat");
             } catch (error) {
               console.error("[webllm-chat-kernel] ===== REGISTRATION ERROR =====", error);
+            }
+
+            // Add command to open WebLLM settings
+            const SETTINGS_COMMAND = "webllm-chat-kernel:open-settings";
+            
+            // Create a custom dialog widget for model selection
+            class ModelSelectorDialogBody extends Widget {
+              private _select: HTMLSelectElement;
+              private _filter: HTMLInputElement;
+              private _modelList: HTMLDivElement;
+              private _selectedModel: string;
+              private _allModels: string[];
+              
+              constructor(currentModel: string) {
+                super();
+                this._selectedModel = currentModel;
+                this._allModels = WEBLLM_MODELS;
+                
+                this.node.style.cssText = 'min-width: 400px; padding: 12px;';
+                
+                // Create filter input
+                const filterLabel = document.createElement('label');
+                filterLabel.textContent = 'Filter models:';
+                filterLabel.style.cssText = 'display: block; margin-bottom: 4px; font-weight: 500;';
+                this.node.appendChild(filterLabel);
+                
+                this._filter = document.createElement('input');
+                this._filter.type = 'text';
+                this._filter.placeholder = 'Type to filter...';
+                this._filter.className = 'jp-mod-styled';
+                this._filter.style.cssText = 'width: 100%; padding: 8px; margin-bottom: 12px; box-sizing: border-box;';
+                this._filter.addEventListener('input', () => this._updateList());
+                this.node.appendChild(this._filter);
+                
+                // Create model list container
+                const listLabel = document.createElement('label');
+                listLabel.textContent = 'Select model:';
+                listLabel.style.cssText = 'display: block; margin-bottom: 4px; font-weight: 500;';
+                this.node.appendChild(listLabel);
+                
+                this._modelList = document.createElement('div');
+                this._modelList.style.cssText = 'max-height: 300px; overflow-y: auto; border: 1px solid var(--jp-border-color1); border-radius: 4px;';
+                this.node.appendChild(this._modelList);
+                
+                // Hidden select for form value
+                this._select = document.createElement('select');
+                this._select.style.display = 'none';
+                this.node.appendChild(this._select);
+                
+                // Current selection display
+                const currentLabel = document.createElement('div');
+                currentLabel.style.cssText = 'margin-top: 12px; padding: 8px; background: var(--jp-layout-color2); border-radius: 4px;';
+                currentLabel.innerHTML = `<strong>Current:</strong> <span id="current-model">${currentModel}</span>`;
+                this.node.appendChild(currentLabel);
+                
+                this._updateList();
+                
+                // Focus filter on show
+                setTimeout(() => this._filter.focus(), 100);
+              }
+              
+              private _updateList(): void {
+                const filter = this._filter.value.toLowerCase();
+                const filtered = filter 
+                  ? this._allModels.filter(m => m.toLowerCase().includes(filter))
+                  : this._allModels;
+                
+                this._modelList.innerHTML = '';
+                this._select.innerHTML = '';
+                
+                if (filtered.length === 0) {
+                  const noMatch = document.createElement('div');
+                  noMatch.textContent = 'No matching models';
+                  noMatch.style.cssText = 'padding: 12px; color: var(--jp-ui-font-color2); font-style: italic;';
+                  this._modelList.appendChild(noMatch);
+                  return;
+                }
+                
+                filtered.forEach(model => {
+                  const option = document.createElement('option');
+                  option.value = model;
+                  option.textContent = model;
+                  if (model === this._selectedModel) option.selected = true;
+                  this._select.appendChild(option);
+                  
+                  const item = document.createElement('div');
+                  item.textContent = model;
+                  item.style.cssText = `
+                    padding: 8px 12px; 
+                    cursor: pointer; 
+                    border-bottom: 1px solid var(--jp-border-color2);
+                    background: ${model === this._selectedModel ? 'var(--jp-brand-color3)' : 'transparent'};
+                  `;
+                  item.addEventListener('mouseenter', () => {
+                    if (model !== this._selectedModel) {
+                      item.style.background = 'var(--jp-layout-color2)';
+                    }
+                  });
+                  item.addEventListener('mouseleave', () => {
+                    item.style.background = model === this._selectedModel ? 'var(--jp-brand-color3)' : 'transparent';
+                  });
+                  item.addEventListener('click', () => {
+                    this._selectedModel = model;
+                    this._select.value = model;
+                    const currentSpan = this.node.querySelector('#current-model');
+                    if (currentSpan) currentSpan.textContent = model;
+                    this._updateList();
+                  });
+                  this._modelList.appendChild(item);
+                });
+              }
+              
+              getValue(): string {
+                return this._selectedModel;
+              }
+            }
+            
+            // Helper to check if current notebook uses WebLLM kernel
+            const isWebLLMKernelActive = (): boolean => {
+              try {
+                const current = app.shell?.currentWidget;
+                if (current && (current as any).sessionContext) {
+                  const kernelName = (current as any).sessionContext?.session?.kernel?.name;
+                  return kernelName === 'webllm-chat';
+                }
+              } catch (e) {
+                // Ignore errors
+              }
+              return false;
+            };
+            
+            app.commands.addCommand(SETTINGS_COMMAND, {
+              label: "Change WebLLM Model...",
+              isVisible: () => isWebLLMKernelActive(),
+              execute: async () => {
+                // Show custom model selection dialog
+                const currentModel = settingsDefaultModel || DEFAULT_WEBLLM_MODEL;
+                const body = new ModelSelectorDialogBody(currentModel);
+                
+                const result = await showDialog({
+                  title: 'Change Model',
+                  body,
+                  buttons: [
+                    Dialog.cancelButton(),
+                    Dialog.okButton({ label: 'Select' })
+                  ]
+                });
+                
+                if (result.button.accept) {
+                  const newModel = body.getValue();
+                  if (newModel && newModel !== currentModel && isValidWebLLMModel(newModel)) {
+                    // Update the settings
+                    if (settingRegistry) {
+                      try {
+                        const settings = await settingRegistry.load("@wiki3-ai/webllm-chat-kernel:plugin");
+                        await settings.set("defaultModel", newModel);
+                        console.log("[webllm-chat-kernel] Model setting saved:", newModel);
+                      } catch (e) {
+                        console.warn("[webllm-chat-kernel] Could not save to settings registry:", e);
+                        // Fall back to just updating the local variable
+                        settingsDefaultModel = newModel;
+                      }
+                    } else {
+                      settingsDefaultModel = newModel;
+                    }
+                  }
+                }
+              }
+            });
+
+            // Add to Settings menu if IMainMenu is available
+            try {
+              const mainMenuModule = await importShared("@jupyterlab/mainmenu");
+              if (mainMenuModule?.IMainMenu) {
+                const IMainMenu = mainMenuModule.IMainMenu;
+                // Try to get mainMenu from app
+                const mainMenu = app.serviceManager?.mainMenu || 
+                  (app as any)._plugins?.get?.(IMainMenu.name)?.service;
+                if (mainMenu?.settingsMenu) {
+                  mainMenu.settingsMenu.addGroup([{ command: SETTINGS_COMMAND }], 100);
+                  console.log("[webllm-chat-kernel] Added settings command to Settings menu");
+                }
+              }
+            } catch (e) {
+              console.log("[webllm-chat-kernel] Could not add to Settings menu:", e);
             }
 
             // Log model download progress to console

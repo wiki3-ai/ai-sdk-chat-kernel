@@ -1,12 +1,27 @@
 {
   "title": "WebLLM Chat Kernel",
   "description": "Settings for the WebLLM Chat Kernel",
+  "jupyter.lab.setting-icon": "ui-components:kernel",
+  "jupyter.lab.setting-icon-label": "WebLLM Chat Kernel",
+  "jupyter.lab.menus": {
+    "main": [
+      {
+        "id": "jp-mainmenu-kernel",
+        "items": [
+          {
+            "command": "webllm-chat-kernel:open-settings",
+            "rank": 10
+          }
+        ]
+      }
+    ]
+  },
   "type": "object",
   "properties": {
     "defaultModel": {
       "type": "string",
       "title": "Default Model",
-      "description": "The WebLLM model to use when the kernel is first initialized. Once a cell is executed, the model is locked and can only be changed using the %ai model <name> magic command.",
+      "description": "The WebLLM model to use when the kernel is first initialized. Once a cell is executed, the model is locked and can only be changed using the %chat model <name> magic command. Use %chat list in a notebook to see all available models.",
       "default": "SmolLM2-360M-Instruct-q4f16_1-MLC"
     }
   },
