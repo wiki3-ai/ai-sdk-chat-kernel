@@ -54,8 +54,8 @@ API keys must be provided via magic commands:
 %chat provider openai
 %chat key sk-proj-your-key-here
 
-# Switch models
-%chat model gpt-4o
+# Switch models (see available models with %chat list openai)
+%chat model gpt-4o-mini
 ```
 
 **For Server/Local Deployments:**
@@ -76,17 +76,28 @@ Or still use magic commands as shown above.
 - `%chat model <name>` - Set the model (provider-specific)
 - `%chat key <api-key>` - Set API key for current provider
 - `%chat list` - List available providers
+- `%chat list <provider>` - List available models for a specific provider
 - `%chat status` - Show current configuration
 - `%chat help` - Show help message
 
 ### Supported Providers
 
 - **built-in-ai**: Chrome/Edge Built-in AI with WebLLM fallback (default)
-- **openai**: OpenAI models (GPT-4, GPT-3.5, etc.)
-- **anthropic**: Anthropic models (Claude 3.5, etc.)
-- **google**: Google models (Gemini, etc.)
+  - Default model: `default` (auto-detected)
+  
+- **openai**: OpenAI models
+  - Default model: `gpt-4o-mini` (economical, fast)
+  - Available: gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-4, gpt-3.5-turbo
+  
+- **anthropic**: Anthropic models
+  - Default model: `claude-3-5-haiku-20241022` (economical, fast)
+  - Available: claude-3-5-sonnet, claude-3-5-haiku, claude-3-opus, etc.
+  
+- **google**: Google models
+  - Default model: `gemini-1.5-flash` (economical, fast)
+  - Available: gemini-2.0-flash-exp, gemini-1.5-flash, gemini-1.5-pro, etc.
 
-Any provider following the Vercel AI SDK pattern can be used by specifying its name.
+Use `%chat list <provider>` to see all available models for each provider.
 
 ## Development
 

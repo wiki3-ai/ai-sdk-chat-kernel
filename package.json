@@ -19,9 +19,9 @@
     "clean": "rm -rf lib dist labextension"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.0.8",
-    "@ai-sdk/google": "^1.0.10",
-    "@ai-sdk/openai": "^1.0.10",
+    "@ai-sdk/anthropic": "^2.0.0",
+    "@ai-sdk/google": "^2.0.0",
+    "@ai-sdk/openai": "^2.0.0",
     "@built-in-ai/core": "^2.0.1",
     "@jupyterlab/application": "^4.5.0",
     "@jupyterlab/coreutils": "^6.5.0",

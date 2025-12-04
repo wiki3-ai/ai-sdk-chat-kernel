@@ -84,6 +84,74 @@ export async function createBuiltInAIProvider(modelName?: string): Promise<any> 
 }
 
 /**
+ * Get available models for a provider
+ */
+export async function getProviderModels(providerName: string): Promise<string[]> {
+  try {
+    switch (providerName) {
+      case 'built-in-ai':
+        return ['default']; // Built-in AI auto-detects
+        
+      case 'openai': {
+        // Common OpenAI chat models (v2 API compatible)
+        return [
+          'gpt-4o-mini',
+          'gpt-4o',
+          'gpt-4-turbo',
+          'gpt-4',
+          'gpt-3.5-turbo',
+        ];
+      }
+      
+      case 'anthropic': {
+        // Common Anthropic models
+        return [
+          'claude-3-5-sonnet-20241022',
+          'claude-3-5-haiku-20241022',
+          'claude-3-opus-20240229',
+          'claude-3-sonnet-20240229',
+          'claude-3-haiku-20240307',
+        ];
+      }
+      
+      case 'google': {
+        // Common Google models
+        return [
+          'gemini-2.0-flash-exp',
+          'gemini-1.5-flash',
+          'gemini-1.5-flash-8b',
+          'gemini-1.5-pro',
+        ];
+      }
+      
+      default:
+        return []; // Unknown provider
+    }
+  } catch (error) {
+    console.error(`[providers] Error getting models for ${providerName}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Get default model for a provider
+ */
+export function getDefaultModel(providerName: string): string {
+  switch (providerName) {
+    case 'built-in-ai':
+      return 'default';
+    case 'openai':
+      return 'gpt-4o-mini'; // Most economical v2 model
+    case 'anthropic':
+      return 'claude-3-5-haiku-20241022'; // Fast and economical
+    case 'google':
+      return 'gemini-1.5-flash'; // Fast and economical
+    default:
+      return 'default';
+  }
+}
+
+/**
  * Create a provider instance dynamically
  */
 export async function createProvider(providerName: string, modelName: string, apiKey?: string): Promise<any> {
@@ -94,7 +162,8 @@ export async function createProvider(providerName: string, modelName: string, ap
     case 'openai': {
       const { createOpenAI } = await import('@ai-sdk/openai');
       const provider = createOpenAI({ apiKey: apiKey ?? undefined });
-      return provider(modelName) as any;
+      // Use .chat() for v2 API compatibility
+      return provider.chat(modelName) as any;
     }
     
     case 'anthropic': {

@@ -2,8 +2,8 @@
 // Module Federation container for JupyterLite with AI SDK support
 
 import { streamText, type LanguageModel } from 'ai';
-import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, type ProviderConfig } from "./models.js";
-import { createProvider } from "./providers.js";
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, getProviderDefaultModel, type ProviderConfig } from "./models.js";
+import { createProvider, getProviderModels, getDefaultModel } from "./providers.js";
 
 declare const window: any;
 
@@ -19,15 +19,20 @@ let settingsDefaultModel: string | null = null;
 /**
  * Get the default provider from settings, falling back to the hardcoded default.
  */
-function getDefaultProvider(): string {
+function getDefaultProviderFromSettings(): string {
   return settingsDefaultProvider ?? DEFAULT_PROVIDER;
 }
 
 /**
- * Get the default model from settings, falling back to the hardcoded default.
+ * Get the default model from settings, or provider-specific default
  */
-function getDefaultModel(): string {
-  return settingsDefaultModel ?? DEFAULT_MODEL;
+function getDefaultModelFromSettings(providerName: string): string {
+  // If settings specify a model, use it
+  if (settingsDefaultModel) {
+    return settingsDefaultModel;
+  }
+  // Otherwise use provider-specific default from providers.ts
+  return getDefaultModel(providerName);
 }
 
 // Helper to get a module from the shared scope
@@ -186,8 +191,8 @@ const container = {
           async setProvider(providerName: string, modelName?: string, apiKey?: string): Promise<string> {
             const config = getProviderConfig(providerName);
             
-            // Use provided model or default
-            const model = modelName || DEFAULT_MODEL;
+            // Use provided model or get default for this provider
+            const model = modelName || getDefaultModel(providerName);
 
             await this.initialize(providerName, model, apiKey);
             
@@ -223,8 +228,8 @@ const container = {
           async send(prompt: string, onChunk?: (chunk: string) => void): Promise<string> {
             // Initialize if not done yet
             if (!this.initialized) {
-              const defaultProvider = getDefaultProvider();
-              const defaultModel = getDefaultModel();
+              const defaultProvider = getDefaultProviderFromSettings();
+              const defaultModel = getDefaultModelFromSettings(defaultProvider);
               await this.initialize(defaultProvider, defaultModel);
               console.log(`[AIChatKernel] Auto-initialized with provider: ${defaultProvider}, model: ${defaultModel}`);
             }
@@ -303,35 +308,74 @@ Note:
 - Any model name can be specified; validation is done by the provider.`;
             }
 
-            // %chat list
-            if (trimmed === "%chat list") {
-              const providers = getAllProviders();
-              let output = "Available Providers:\n\n";
+            // %chat list [provider]
+            const listMatch = trimmed.match(/^%chat\s+list(?:\s+(\S+))?$/);
+            if (listMatch || trimmed === "%chat list") {
+              const specificProvider = listMatch?.[1];
               
-              for (const config of providers) {
-                output += `• ${config.displayName} (${config.name})\n`;
-                if (config.isBuiltIn) {
-                  output += `  Type: Browser built-in (Chrome/Edge AI or WebLLM fallback)\n`;
-                } else if (config.requiresApiKey) {
-                  output += `  Requires API key${config.envVar ? `: ${config.envVar}` : ''}\n`;
+              if (specificProvider) {
+                // List models for a specific provider
+                const models = await getProviderModels(specificProvider);
+                const config = getProviderConfig(specificProvider);
+                
+                if (!config) {
+                  return `Unknown provider: ${specificProvider}\n\nUse "%chat list" to see available providers.`;
                 }
-                output += "\n";
+                
+                let output = `${config.displayName} (${config.name}) Models:\n\n`;
+                
+                if (models.length > 0) {
+                  const defaultModel = getDefaultModel(specificProvider);
+                  models.forEach((model: string) => {
+                    const isDefault = model === defaultModel;
+                    output += `  ${isDefault ? '• ' : '  '}${model}${isDefault ? ' (default)' : ''}\n`;
+                  });
+                } else {
+                  output += "  Accepts any model name\n";
+                }
+                
+                if (config.requiresApiKey) {
+                  output += `\nRequires API key: ${config.envVar || 'Set via %chat key'}\n`;
+                }
+                
+                output += `\nUsage: %chat provider ${specificProvider}${config.requiresApiKey ? ' --key <api-key>' : ''}`;
+                
+                return output;
+              } else {
+                // List all providers
+                const providers = getAllProviders();
+                let output = "Available Providers:\n\n";
+                
+                for (const config of providers) {
+                  const defaultModel = getDefaultModel(config.name);
+                  output += `• ${config.displayName} (${config.name})\n`;
+                  output += `  Default model: ${defaultModel}\n`;
+                  
+                  if (config.isBuiltIn) {
+                    output += `  Type: Browser built-in (Chrome/Edge AI or WebLLM fallback)\n`;
+                  } else if (config.requiresApiKey) {
+                    output += `  Requires API key${config.envVar ? `: ${config.envVar}` : ''}\n`;
+                  }
+                  output += "\n";
+                }
+                
+                output += "Use '%chat list <provider>' to see models for a specific provider.\n";
+                output += "\nExamples:\n";
+                output += "  %chat list openai\n";
+                output += "  %chat provider built-in-ai\n";
+                output += "  %chat provider openai --key sk-...\n";
+                
+                return output;
               }
-              
-              output += "Note: Model names are provider-specific. Use any valid model name for your chosen provider.\n";
-              output += "\nExamples:\n";
-              output += "  %chat provider built-in-ai\n";
-              output += "  %chat provider openai --key sk-... && %chat model gpt-4o\n";
-              output += "  %chat provider anthropic --key sk-ant-... && %chat model claude-3-5-sonnet-20241022\n";
-              
-              return output;
             }
 
             // %chat status
             if (trimmed === "%chat status") {
               const { provider, model } = this.chat.getConfig();
               if (!provider) {
-                return `Not yet initialized. Will use default: ${getDefaultProvider()} with model ${getDefaultModel()}`;
+                const defProvider = getDefaultProviderFromSettings();
+                const defModel = getDefaultModelFromSettings(defProvider);
+                return `Not yet initialized. Will use default: ${defProvider} with model ${defModel}`;
               }
               return `Current provider: ${provider}\nCurrent model: ${model}`;
             }
