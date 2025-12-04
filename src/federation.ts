@@ -123,25 +123,20 @@ const container = {
           }
 
           /**
-           * Get API key from environment variable or stored key
+           * Get API key from stored key only (browser environment doesn't have access to env vars)
+           * Environment variables would need to be injected at build time, which is not recommended
+           * for security reasons in browser contexts.
            */
           private getApiKey(providerName: string): string | null {
-            // First check if we have a stored key
+            // Check if we have a stored key for the current provider
             if (this.apiKey && this.provider === providerName) {
               return this.apiKey;
             }
 
-            // Check environment variable
-            const config = getProviderConfig(providerName);
-            if (config) {
-              // In browser environment, we can't access real env vars
-              // But if they were set before bundling, they'd be here
-              const envKey = (process.env as any)[config.envVar];
-              if (envKey) {
-                return envKey;
-              }
-            }
-
+            // In browser environments, we don't have access to process.env at runtime
+            // Users must provide API keys via magic commands:
+            // - %chat provider <name> --key <api-key>
+            // - %chat key <api-key>
             return null;
           }
 
@@ -169,7 +164,7 @@ const container = {
             const config = getProviderConfig(providerName);
 
             if (!key && config?.requiresApiKey) {
-              throw new Error(`API key required for ${providerName}. Set ${config.envVar} environment variable, use %chat key <api-key>, or provide via %chat provider ${providerName} --key <api-key>`);
+              throw new Error(`API key required for ${providerName}. Provide it using:\n  %chat provider ${providerName} --key <your-api-key>\nOr set it separately:\n  %chat key <your-api-key>`);
             }
 
             // Create the appropriate provider instance
@@ -312,15 +307,14 @@ const container = {
   %chat help                      - Show this help message
 
 Examples:
-  %chat provider openai
+  %chat provider openai --key sk-proj-...
   %chat provider anthropic --key sk-ant-...
   %chat model gpt-4o
   %chat key sk-...
 
-API Keys can be provided via:
-1. Environment variables (${Object.values(PROVIDERS).map(p => p.envVar).join(', ')})
-2. Magic command arguments: %chat provider <name> --key <key>
-3. Separately: %chat key <key>`;
+Note: API keys must be provided via magic commands in browser environments.
+For local/server deployments, environment variables can be used:
+  ${Object.entries(PROVIDERS).map(([name, p]) => `${name}: ${p.envVar}`).join('\n  ')}`;
             }
 
             // %chat list

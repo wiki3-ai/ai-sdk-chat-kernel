@@ -18,29 +18,37 @@ pip install -e .
 
 - **Multi-Provider Support**: Works with OpenAI, Anthropic, Google, and other Vercel AI SDK providers
 - **Flexible API Key Management**: 
-  - Environment variables
-  - Magic command arguments
-  - Interactive prompts
+  - Magic command arguments (recommended for browser environments)
+  - Environment variables (for server/local deployments)
 - **Model Selection**: Easy switching between models via magic commands
 
 ## Usage
 
 ### Setting API Keys
 
-You can provide API keys in several ways:
+**For Browser Environments (JupyterLite):**
 
-1. **Environment Variables** (recommended):
-```bash
-export OPENAI_API_KEY="your-key-here"
-export ANTHROPIC_API_KEY="your-key-here"
-```
+API keys must be provided via magic commands:
 
-2. **Magic Command Arguments**:
 ```python
-%chat provider openai --key your-key-here
+# Set provider with API key
+%chat provider openai --key sk-proj-your-key-here
+
+# Or set key separately
+%chat key sk-proj-your-key-here
 ```
 
-3. **Interactive Prompt**: The kernel will prompt you when needed
+**For Server/Local Deployments:**
+
+You can use environment variables:
+
+```bash
+export OPENAI_API_KEY="sk-proj-your-key-here"
+export ANTHROPIC_API_KEY="sk-ant-your-key-here"
+export GOOGLE_GENERATIVE_AI_API_KEY="your-key-here"
+```
+
+Or still use magic commands as shown above.
 
 ### Magic Commands
 
