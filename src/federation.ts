@@ -171,13 +171,13 @@ const container = {
             let providerInstance: any;
             switch (providerName) {
               case 'openai':
-                providerInstance = createOpenAI({ apiKey: key || undefined });
+                providerInstance = createOpenAI({ apiKey: key ?? undefined });
                 break;
               case 'anthropic':
-                providerInstance = createAnthropic({ apiKey: key || undefined });
+                providerInstance = createAnthropic({ apiKey: key ?? undefined });
                 break;
               case 'google':
-                providerInstance = createGoogleGenerativeAI({ apiKey: key || undefined });
+                providerInstance = createGoogleGenerativeAI({ apiKey: key ?? undefined });
                 break;
               default:
                 throw new Error(`Unsupported provider: ${providerName}`);
@@ -193,6 +193,10 @@ const container = {
            * Set API key for current provider
            */
           setApiKey(key: string): void {
+            // Validate API key format (no whitespace)
+            if (!key || /\s/.test(key)) {
+              throw new Error("Invalid API key format. API keys should not contain whitespace.");
+            }
             this.apiKey = key;
             console.log(`[AIChatKernel] API key updated`);
           }
@@ -345,7 +349,7 @@ For local/server deployments, environment variables can be used:
             // %chat key <api-key>
             const keyMatch = trimmed.match(/^%chat\s+key\s+(\S+)$/);
             if (keyMatch) {
-              const key = keyMatch[1].trim();
+              const key = keyMatch[1];
               this.chat.setApiKey(key);
               return "API key set successfully.";
             }
@@ -354,7 +358,7 @@ For local/server deployments, environment variables can be used:
             const providerMatch = trimmed.match(/^%chat\s+provider\s+(\S+)(?:\s+--key\s+(\S+))?$/);
             if (providerMatch) {
               const providerName = providerMatch[1];
-              const apiKey = providerMatch[2]?.trim();
+              const apiKey = providerMatch[2];
               try {
                 const result = await this.chat.setProvider(providerName, undefined, apiKey);
                 return result;
