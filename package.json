@@ -1,7 +1,7 @@
 {
-  "name": "@wiki3-ai/webllm-chat-kernel",
+  "name": "@wiki3-ai/ai-sdk-chat-kernel",
   "version": "0.2.5dev2",
-  "description": "WebLLM chat kernel for JupyterLite using @built-in-ai/web-llm",
+  "description": "AI SDK chat kernel for JupyterLite using Vercel AI SDK",
   "type": "module",
   "main": "dist/index.js",
   "files": [
@@ -14,15 +14,18 @@
     "build:package": "node -e \"const pkg = require('./package.json'); const fs = require('fs'); const out = {name: pkg.name, version: pkg.version, jupyterlab: {...pkg.jupyterlab, _build: {load: 'index.js', extension: './extension'}}}; fs.writeFileSync('dist/package.json', JSON.stringify(out, null, 2));\"",
     "build": "npm run build:labextension",
     "build:prod": "npm run build:labextension && npm run copy:labextension",
-    "copy:labextension": "mkdir -p labextension && cp -r dist/* labextension/ && cp install.json labextension/ && mkdir -p labextension/schemas/@wiki3-ai/webllm-chat-kernel && cp schema/plugin.json labextension/schemas/@wiki3-ai/webllm-chat-kernel/",
+    "copy:labextension": "mkdir -p labextension && cp -r dist/* labextension/ && cp install.json labextension/ && mkdir -p labextension/schemas/@wiki3-ai/ai-sdk-chat-kernel && cp schema/plugin.json labextension/schemas/@wiki3-ai/ai-sdk-chat-kernel/",
     "clean": "rm -rf lib dist labextension"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^1.0.8",
+    "@ai-sdk/google": "^1.0.10",
+    "@ai-sdk/openai": "^1.0.10",
     "@jupyterlab/application": "^4.5.0",
     "@jupyterlab/coreutils": "^6.5.0",
     "@jupyterlab/services": "^7.5.0",
     "@jupyterlite/kernel": "^0.7.0",
-    "@mlc-ai/web-llm": "^0.2.79"
+    "ai": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

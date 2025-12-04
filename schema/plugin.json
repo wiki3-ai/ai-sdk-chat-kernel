@@ -1,15 +1,15 @@
 {
-  "title": "WebLLM Chat Kernel",
-  "description": "Settings for the WebLLM Chat Kernel",
+  "title": "AI SDK Chat Kernel",
+  "description": "Settings for the AI SDK Chat Kernel",
   "jupyter.lab.setting-icon": "ui-components:kernel",
-  "jupyter.lab.setting-icon-label": "WebLLM Chat Kernel",
+  "jupyter.lab.setting-icon-label": "AI SDK Chat Kernel",
   "jupyter.lab.menus": {
     "main": [
       {
         "id": "jp-mainmenu-kernel",
         "items": [
           {
-            "command": "webllm-chat-kernel:open-settings",
+            "command": "ai-sdk-chat-kernel:open-settings",
             "rank": 10
           }
         ]
@@ -18,11 +18,18 @@
   },
   "type": "object",
   "properties": {
+    "defaultProvider": {
+      "type": "string",
+      "title": "Default Provider",
+      "description": "The AI provider to use (openai, anthropic, google, etc.)",
+      "default": "openai",
+      "enum": ["openai", "anthropic", "google"]
+    },
     "defaultModel": {
       "type": "string",
       "title": "Default Model",
-      "description": "The WebLLM model to use when the kernel is first initialized. Once a cell is executed, the model is locked and can only be changed using the %chat model <name> magic command. Use %chat list in a notebook to see all available models.",
-      "default": "SmolLM2-360M-Instruct-q4f16_1-MLC"
+      "description": "The model to use when the kernel is first initialized. Use %chat list in a notebook to see available models for each provider.",
+      "default": "gpt-4o-mini"
     }
   },
   "additionalProperties": false
