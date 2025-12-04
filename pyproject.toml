@@ -1,6 +1,6 @@
 [project]
 name = "ai-sdk-chat-kernel"
-version = "0.2.6dev4"
+version = "0.2.6dev5"
 description = "AI SDK chat kernel for JupyterLite using Vercel AI SDK"
 readme = "README.md"
 requires-python = ">=3.11"
