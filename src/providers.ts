@@ -55,7 +55,10 @@ export async function createBuiltInAIProvider(modelName?: string): Promise<any> 
       provider: 'webllm',
       modelId: defaultModel,
       doGenerate: async (options: any) => {
-        const messages = options.prompt || [];
+        // AI SDK passes messages in options.prompt
+        const messages = Array.isArray(options.prompt) ? options.prompt : 
+                        (options.prompt?.messages || options.prompt || []);
+        
         const stream = await engine.chat.completions.create({
           messages,
           stream: true,
@@ -70,6 +73,7 @@ export async function createBuiltInAIProvider(modelName?: string): Promise<any> 
           }
         };
         
+        // Note: WebLLM doesn't provide token usage statistics in streaming mode
         return {
           text: textStream,
           usage: { promptTokens: 0, completionTokens: 0 },

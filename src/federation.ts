@@ -3,7 +3,7 @@
 
 import { streamText, type LanguageModel } from 'ai';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, type ProviderConfig } from "./models.js";
-import { createProvider, isBuiltInAIAvailable } from "./providers.js";
+import { createProvider } from "./providers.js";
 
 declare const window: any;
 

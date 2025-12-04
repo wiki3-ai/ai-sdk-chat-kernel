@@ -1,12 +1,17 @@
 // src/models.ts
 // Provider and model configuration for AI SDK
 
+export interface ProviderFactoryOptions {
+  apiKey?: string;
+  [key: string]: any;
+}
+
 export interface ProviderConfig {
   name: string;
   displayName: string;
   requiresApiKey: boolean;
   envVar?: string;
-  factory?: (options?: any) => any;
+  factory?: (options?: ProviderFactoryOptions) => Promise<any>;
   isBuiltIn?: boolean;
 }
 
