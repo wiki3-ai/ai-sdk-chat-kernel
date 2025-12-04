@@ -70,3 +70,16 @@ npm run build
 # Install in development mode
 pip install -e .
 ```
+
+### Version Management
+
+The version is managed in a single location: `pyproject.toml`. To update the version:
+
+1. Edit the version in `pyproject.toml`
+2. Run `npm run sync-version` (or just `npm run build` which includes this step)
+
+The version will automatically sync to:
+- `package.json` (via `sync-version` script)
+- `ai_sdk_chat_kernel/__init__.py` (dynamically reads from `pyproject.toml`)
+
+**Note:** Do not manually edit the version in `package.json` or `__init__.py` - it will be overwritten.
