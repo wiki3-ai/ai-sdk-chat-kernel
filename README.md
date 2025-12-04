@@ -17,7 +17,7 @@ pip install -e .
 ## Development
 
 ```bash
-# Install npm dependencies
+# Install npm dependencies (updates package-lock.json)
 npm install
 
 # Build the extension
