@@ -2,7 +2,7 @@
 // Module Federation container for JupyterLite with AI SDK support
 
 import { streamText, type LanguageModel } from 'ai';
-import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, getProviderDefaultModel, type ProviderConfig } from "./models.js";
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, type ProviderConfig } from "./models.js";
 import { createProvider, getProviderModels, getDefaultModel } from "./providers.js";
 
 declare const window: any;

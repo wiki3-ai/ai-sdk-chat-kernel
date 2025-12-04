@@ -54,23 +54,6 @@ Object.values(SUGGESTED_PROVIDERS).forEach(config => {
 export const DEFAULT_PROVIDER = 'built-in-ai';
 export const DEFAULT_MODEL = 'default';
 
-// Get default model for a provider (imported from providers.ts at runtime)
-export function getProviderDefaultModel(providerName: string): string {
-  // This will be overridden by providers.ts export
-  switch (providerName) {
-    case 'built-in-ai':
-      return 'default';
-    case 'openai':
-      return 'gpt-4o-mini';
-    case 'anthropic':
-      return 'claude-3-5-haiku-20241022';
-    case 'google':
-      return 'gemini-1.5-flash';
-    default:
-      return 'default';
-  }
-}
-
 export function registerProvider(config: ProviderConfig): void {
   providerRegistry.set(config.name, config);
 }
