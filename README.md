@@ -16,15 +16,31 @@ pip install -e .
 
 ## Features
 
+- **Built-in AI Support**: Automatic detection and use of Chrome/Edge Built-in AI with WebLLM fallback
 - **Multi-Provider Support**: Works with OpenAI, Anthropic, Google, and other Vercel AI SDK providers
+- **Flexible Configuration**: Dynamic provider and model selection without hardcoded lists
 - **Flexible API Key Management**: 
   - Magic command arguments (recommended for browser environments)
   - Environment variables (for server/local deployments)
-- **Model Selection**: Easy switching between models via magic commands
+- **Model Selection**: Easy switching between any provider-specific models via magic commands
 
 ## Usage
 
-### Setting API Keys
+### Built-in AI (Default)
+
+By default, the kernel uses the `built-in-ai` provider, which automatically:
+- Uses Chrome/Edge Built-in AI if available in your browser
+- Falls back to WebLLM (lightweight local models) if built-in AI is not available
+
+No configuration needed! Just start chatting:
+
+```python
+Hello! How are you?
+```
+
+### Using Cloud Providers
+
+To use cloud providers like OpenAI, Anthropic, or Google:
 
 **For Browser Environments (JupyterLite):**
 
@@ -35,7 +51,11 @@ API keys must be provided via magic commands:
 %chat provider openai --key sk-proj-your-key-here
 
 # Or set key separately
+%chat provider openai
 %chat key sk-proj-your-key-here
+
+# Switch models
+%chat model gpt-4o
 ```
 
 **For Server/Local Deployments:**
@@ -52,11 +72,21 @@ Or still use magic commands as shown above.
 
 ### Magic Commands
 
-- `%chat provider <name>` - Set the provider (openai, anthropic, google)
-- `%chat model <name>` - Set the model
-- `%chat key <api-key>` - Set API key
-- `%chat list` - List available providers and models
+- `%chat provider <name>` - Set the provider (built-in-ai, openai, anthropic, google, etc.)
+- `%chat model <name>` - Set the model (provider-specific)
+- `%chat key <api-key>` - Set API key for current provider
+- `%chat list` - List available providers
+- `%chat status` - Show current configuration
 - `%chat help` - Show help message
+
+### Supported Providers
+
+- **built-in-ai**: Chrome/Edge Built-in AI with WebLLM fallback (default)
+- **openai**: OpenAI models (GPT-4, GPT-3.5, etc.)
+- **anthropic**: Anthropic models (Claude 3.5, etc.)
+- **google**: Google models (Gemini, etc.)
+
+Any provider following the Vercel AI SDK pattern can be used by specifying its name.
 
 ## Development
 

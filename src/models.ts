@@ -4,67 +4,63 @@
 export interface ProviderConfig {
   name: string;
   displayName: string;
-  models: string[];
   requiresApiKey: boolean;
-  envVar: string;
+  envVar?: string;
+  factory?: (options?: any) => any;
+  isBuiltIn?: boolean;
 }
 
-export const PROVIDERS: Record<string, ProviderConfig> = {
-  openai: {
+// Registry of available providers
+const providerRegistry: Map<string, ProviderConfig> = new Map();
+
+// Default provider suggestions (non-exhaustive)
+export const SUGGESTED_PROVIDERS: Record<string, ProviderConfig> = {
+  'built-in-ai': {
+    name: 'built-in-ai',
+    displayName: 'Built-in AI (Chrome/Edge)',
+    requiresApiKey: false,
+    isBuiltIn: true,
+  },
+  'openai': {
     name: 'openai',
     displayName: 'OpenAI',
-    models: [
-      'gpt-4o',
-      'gpt-4o-mini',
-      'gpt-4-turbo',
-      'gpt-4',
-      'gpt-3.5-turbo',
-      'o1-preview',
-      'o1-mini',
-    ],
     requiresApiKey: true,
     envVar: 'OPENAI_API_KEY',
   },
-  anthropic: {
+  'anthropic': {
     name: 'anthropic',
     displayName: 'Anthropic',
-    models: [
-      'claude-3-5-sonnet-20241022',
-      'claude-3-5-haiku-20241022',
-      'claude-3-opus-20240229',
-      'claude-3-sonnet-20240229',
-      'claude-3-haiku-20240307',
-    ],
     requiresApiKey: true,
     envVar: 'ANTHROPIC_API_KEY',
   },
-  google: {
+  'google': {
     name: 'google',
     displayName: 'Google',
-    models: [
-      'gemini-2.0-flash-exp',
-      'gemini-1.5-flash',
-      'gemini-1.5-flash-8b',
-      'gemini-1.5-pro',
-    ],
     requiresApiKey: true,
     envVar: 'GOOGLE_GENERATIVE_AI_API_KEY',
   },
 };
 
-export const DEFAULT_PROVIDER = 'openai';
-export const DEFAULT_MODEL = 'gpt-4o-mini';
+// Initialize registry with suggested providers
+Object.values(SUGGESTED_PROVIDERS).forEach(config => {
+  providerRegistry.set(config.name, config);
+});
 
-export function isValidProvider(name: string): boolean {
-  return name in PROVIDERS;
+export const DEFAULT_PROVIDER = 'built-in-ai';
+export const DEFAULT_MODEL = 'default';
+
+export function registerProvider(config: ProviderConfig): void {
+  providerRegistry.set(config.name, config);
 }
 
-export function isValidModel(provider: string, model: string): boolean {
-  const providerConfig = PROVIDERS[provider];
-  if (!providerConfig) return false;
-  return providerConfig.models.includes(model);
+export function getProvider(name: string): ProviderConfig | undefined {
+  return providerRegistry.get(name);
+}
+
+export function getAllProviders(): ProviderConfig[] {
+  return Array.from(providerRegistry.values());
 }
 
 export function getProviderConfig(name: string): ProviderConfig | null {
-  return PROVIDERS[name] || null;
+  return providerRegistry.get(name) || null;
 }

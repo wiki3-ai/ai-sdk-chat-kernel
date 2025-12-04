@@ -22,10 +22,12 @@
     "@ai-sdk/anthropic": "^1.0.8",
     "@ai-sdk/google": "^1.0.10",
     "@ai-sdk/openai": "^1.0.10",
+    "@built-in-ai/core": "^2.0.1",
     "@jupyterlab/application": "^4.5.0",
     "@jupyterlab/coreutils": "^6.5.0",
     "@jupyterlab/services": "^7.5.0",
     "@jupyterlite/kernel": "^0.7.0",
+    "@mlc-ai/web-llm": "^0.2.80",
     "ai": "^5.0.0"
   },
   "devDependencies": {

@@ -1,9 +1,11 @@
 // src/federation.ts
 // Module Federation container for JupyterLite with AI SDK support
 
+import { createOpenAI } from '@ai-sdk/openai';
+import { createAnthropic } from '@ai-sdk/anthropic';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { streamText, type LanguageModel } from 'ai';
-import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, type ProviderConfig } from "./models.js";
-import { createProvider, isBuiltInAIAvailable } from "./providers.js";
+import { PROVIDERS, DEFAULT_PROVIDER, DEFAULT_MODEL, isValidProvider, isValidModel, getProviderConfig, type ProviderConfig } from "./models.js";
 
 declare const window: any;
 
@@ -114,7 +116,7 @@ const container = {
           private modelName: string | null = null;
           private apiKey: string | null = null;
           private initialized: boolean = false;
-          private languageModel: any | null = null;
+          private languageModel: LanguageModel | null = null;
 
           constructor() {
             console.log("[AIChatKernel] Created (initialization deferred until first execution)");
@@ -142,6 +144,14 @@ const container = {
            * Initialize or reinitialize with a provider and model
            */
           async initialize(providerName: string, modelName: string, apiKey?: string): Promise<void> {
+            if (!isValidProvider(providerName)) {
+              throw new Error(`Invalid provider: ${providerName}. Use %chat list to see available providers.`);
+            }
+
+            if (!isValidModel(providerName, modelName)) {
+              throw new Error(`Invalid model: ${modelName} for provider ${providerName}. Use %chat list to see available models.`);
+            }
+
             // Store the configuration
             this.provider = providerName;
             this.modelName = modelName;
@@ -153,19 +163,30 @@ const container = {
             let key = this.getApiKey(providerName);
             const config = getProviderConfig(providerName);
 
-            // Check if API key is required but not provided
             if (!key && config?.requiresApiKey) {
               throw new Error(`API key required for ${providerName}. Provide it using:\n  %chat provider ${providerName} --key <your-api-key>\nOr set it separately:\n  %chat key <your-api-key>`);
             }
 
-            // Create language model using dynamic provider system
-            try {
-              this.languageModel = await createProvider(providerName, modelName, key ?? undefined);
-              this.initialized = true;
-              console.log(`[AIChatKernel] Initialized with provider: ${providerName}, model: ${modelName}`);
-            } catch (error: any) {
-              throw new Error(`Failed to initialize provider ${providerName}: ${error.message}`);
+            // Create the appropriate provider instance
+            let providerInstance: any;
+            switch (providerName) {
+              case 'openai':
+                providerInstance = createOpenAI({ apiKey: key ?? undefined });
+                break;
+              case 'anthropic':
+                providerInstance = createAnthropic({ apiKey: key ?? undefined });
+                break;
+              case 'google':
+                providerInstance = createGoogleGenerativeAI({ apiKey: key ?? undefined });
+                break;
+              default:
+                throw new Error(`Unsupported provider: ${providerName}`);
             }
+
+            // Create language model
+            this.languageModel = providerInstance(modelName);
+            this.initialized = true;
+            console.log(`[AIChatKernel] Initialized with provider: ${providerName}, model: ${modelName}`);
           }
 
           /**
@@ -185,14 +206,15 @@ const container = {
            */
           async setProvider(providerName: string, modelName?: string, apiKey?: string): Promise<string> {
             const config = getProviderConfig(providerName);
-            
-            // Use provided model or default
-            const model = modelName || DEFAULT_MODEL;
+            if (!config) {
+              throw new Error(`Invalid provider: ${providerName}`);
+            }
+
+            // Use provided model or default for provider
+            const model = modelName || config.models[0];
 
             await this.initialize(providerName, model, apiKey);
-            
-            const displayName = config?.displayName || providerName;
-            return `Provider set to: ${displayName} (${model})`;
+            return `Provider set to: ${config.displayName} (${model})`;
           }
 
           /**
@@ -278,52 +300,40 @@ const container = {
 
             // %chat help
             if (trimmed === "%chat" || trimmed === "%chat help") {
-              const providers = getAllProviders();
-              const providerList = providers.map(p => p.name).join(', ');
-              
               return `AI SDK Chat Kernel Magic Commands:
 
-  %chat provider <name>           - Set provider (${providerList})
+  %chat provider <name>           - Set provider (openai, anthropic, google)
   %chat provider <name> --key <k> - Set provider with API key
-  %chat model <name>              - Set model (provider-specific)
+  %chat model <name>              - Set model
   %chat key <api-key>             - Set API key for current provider
-  %chat list                      - List available providers
+  %chat list                      - List available providers and models
   %chat status                    - Show current configuration
   %chat help                      - Show this help message
 
 Examples:
-  %chat provider built-in-ai
   %chat provider openai --key sk-proj-...
+  %chat provider anthropic --key sk-ant-...
   %chat model gpt-4o
   %chat key sk-...
 
-Note: 
-- The 'built-in-ai' provider uses Chrome Built-in AI if available, or WebLLM as fallback.
-- API keys must be provided via magic commands in browser environments.
-- Any model name can be specified; validation is done by the provider.`;
+Note: API keys must be provided via magic commands in browser environments.
+For local/server deployments, environment variables can be used:
+  ${Object.entries(PROVIDERS).map(([name, p]) => `${name}: ${p.envVar}`).join('\n  ')}`;
             }
 
             // %chat list
             if (trimmed === "%chat list") {
-              const providers = getAllProviders();
-              let output = "Available Providers:\n\n";
-              
-              for (const config of providers) {
-                output += `• ${config.displayName} (${config.name})\n`;
-                if (config.isBuiltIn) {
-                  output += `  Type: Browser built-in (Chrome/Edge AI or WebLLM fallback)\n`;
-                } else if (config.requiresApiKey) {
-                  output += `  Requires API key${config.envVar ? `: ${config.envVar}` : ''}\n`;
+              let output = "Available Providers and Models:\n\n";
+              for (const [name, config] of Object.entries(PROVIDERS)) {
+                output += `${config.displayName} (${name}):\n`;
+                config.models.forEach((model: string) => {
+                  output += `  - ${model}\n`;
+                });
+                if (config.requiresApiKey) {
+                  output += `  Requires API key: ${config.envVar}\n`;
                 }
                 output += "\n";
               }
-              
-              output += "Note: Model names are provider-specific. Use any valid model name for your chosen provider.\n";
-              output += "\nExamples:\n";
-              output += "  %chat provider built-in-ai\n";
-              output += "  %chat provider openai --key sk-... && %chat model gpt-4o\n";
-              output += "  %chat provider anthropic --key sk-ant-... && %chat model claude-3-5-sonnet-20241022\n";
-              
               return output;
             }
 
@@ -516,7 +526,7 @@ Note:
                   const provider = settings.get("defaultProvider").composite as string;
                   const model = settings.get("defaultModel").composite as string;
                   
-                  if (provider) {
+                  if (provider && isValidProvider(provider)) {
                     settingsDefaultProvider = provider;
                     console.log("[ai-sdk-chat-kernel] Default provider from settings:", provider);
                   }
