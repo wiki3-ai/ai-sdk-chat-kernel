@@ -22,7 +22,7 @@ const providerRegistry: Map<string, ProviderConfig> = new Map();
 export const SUGGESTED_PROVIDERS: Record<string, ProviderConfig> = {
   'built-in-ai': {
     name: 'built-in-ai',
-    displayName: 'Built-in AI (Chrome/Edge)',
+    displayName: 'Built-in AI',
     requiresApiKey: false,
     isBuiltIn: true,
   },
@@ -52,7 +52,7 @@ Object.values(SUGGESTED_PROVIDERS).forEach(config => {
 });
 
 export const DEFAULT_PROVIDER = 'built-in-ai';
-export const DEFAULT_MODEL = 'default';
+export const DEFAULT_MODEL = 'prompt-api';
 
 export function registerProvider(config: ProviderConfig): void {
   providerRegistry.set(config.name, config);

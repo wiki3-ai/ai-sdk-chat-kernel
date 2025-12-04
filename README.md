@@ -28,14 +28,20 @@ pip install -e .
 
 ### Built-in AI (Default)
 
-By default, the kernel uses the `built-in-ai` provider, which automatically:
-- Uses Chrome/Edge Built-in AI if available in your browser
-- Falls back to WebLLM (lightweight local models) if built-in AI is not available
+By default, the kernel uses the `built-in-ai` provider with model `prompt-api`:
+- **prompt-api**: Uses Chrome/Edge Built-in AI (requires enabling in chrome://flags)
+- **WebLLM models**: Local inference with models like `SmolLM2-360M-Instruct-q4f16_1-MLC`
 
-No configuration needed! Just start chatting:
+No API key needed! Use `%chat list built-in-ai` to see available models.
 
 ```python
+# Using Chrome Built-in AI (if enabled)
+%chat provider built-in-ai
+%chat model prompt-api
 Hello! How are you?
+
+# Or use WebLLM for local inference
+%chat model SmolLM2-360M-Instruct-q4f16_1-MLC
 ```
 
 ### Using Cloud Providers
@@ -82,20 +88,22 @@ Or still use magic commands as shown above.
 
 ### Supported Providers
 
-- **built-in-ai**: Chrome/Edge Built-in AI with WebLLM fallback (default)
-  - Default model: `default` (auto-detected)
+- **built-in-ai**: Browser-based AI (default, no API key needed)
+  - **prompt-api**: Chrome/Edge Built-in AI (default if available)
+  - **WebLLM models**: Local inference (SmolLM2, Llama-3.2, Phi-3.5, Qwen2.5, etc.)
+  - Use `%chat list built-in-ai` to see all available models
   
-- **openai**: OpenAI models
-  - Default model: `gpt-4o-mini` (economical, fast)
-  - Available: gpt-4o-mini, gpt-4o, gpt-4-turbo, gpt-4, gpt-3.5-turbo
+- **openai**: OpenAI models (requires API key)
+  - Default: `gpt-4o-mini` (economical, fast)
+  - Available: gpt-4o, gpt-4-turbo, gpt-4, gpt-3.5-turbo
   
-- **anthropic**: Anthropic models
-  - Default model: `claude-3-5-haiku-20241022` (economical, fast)
-  - Available: claude-3-5-sonnet, claude-3-5-haiku, claude-3-opus, etc.
+- **anthropic**: Anthropic models (requires API key)
+  - Default: `claude-3-5-haiku-20241022` (economical, fast)
+  - Available: claude-3-5-sonnet, claude-3-opus, etc.
   
-- **google**: Google models
-  - Default model: `gemini-1.5-flash` (economical, fast)
-  - Available: gemini-2.0-flash-exp, gemini-1.5-flash, gemini-1.5-pro, etc.
+- **google**: Google models (requires API key)
+  - Default: `gemini-1.5-flash` (economical, fast)
+  - Available: gemini-2.0-flash-exp, gemini-1.5-pro, etc.
 
 Use `%chat list <provider>` to see all available models for each provider.
 

@@ -6,44 +6,48 @@ import { type LanguageModel } from 'ai';
 declare const window: any;
 
 /**
- * Check if Chrome Built-in AI is available
+ * Check if Chrome Built-in AI Prompt API is available
  */
-export async function isBuiltInAIAvailable(): Promise<boolean> {
+export async function isPromptAPIAvailable(): Promise<boolean> {
   try {
-    // Check if window.ai is available (Chrome Built-in AI API)
+    // Check if window.ai is available (Chrome Built-in AI Prompt API)
     if (typeof window !== 'undefined' && window.ai && window.ai.languageModel) {
       const capabilities = await window.ai.languageModel.capabilities();
       return capabilities && capabilities.available !== 'no';
     }
     return false;
   } catch (error) {
-    console.log('[providers] Built-in AI check failed:', error);
+    console.log('[providers] Prompt API check failed:', error);
     return false;
   }
 }
 
 /**
- * Create a Built-in AI provider (Chrome/Edge native AI or WebLLM fallback)
+ * Create a Built-in AI provider instance based on model name
+ * - "prompt-api": Use Chrome/Edge Built-in AI Prompt API
+ * - WebLLM model names: Use WebLLM for local inference
  */
-export async function createBuiltInAIProvider(modelName?: string): Promise<any> {
-  const hasBuiltInAI = await isBuiltInAIAvailable();
-  
-  if (hasBuiltInAI) {
-    console.log('[providers] Using Chrome Built-in AI');
+export async function createBuiltInAIProvider(modelName: string): Promise<any> {
+  // Determine which implementation to use based on model name
+  if (modelName === 'prompt-api') {
+    console.log('[providers] Using Chrome Built-in AI Prompt API');
+    // Check if Prompt API is available
+    const hasPromptAPI = await isPromptAPIAvailable();
+    if (!hasPromptAPI) {
+      throw new Error('Chrome Built-in AI Prompt API is not available. Enable it in chrome://flags or use a WebLLM model.');
+    }
+    
     // Dynamically import @built-in-ai/core
     const { builtInAI } = await import('@built-in-ai/core');
-    // builtInAI() doesn't take a model parameter, it auto-detects
     return builtInAI();
   } else {
-    console.log('[providers] Built-in AI not available, falling back to WebLLM');
+    // Use WebLLM for the specified model
+    console.log(`[providers] Using WebLLM with model: ${modelName}`);
     // Dynamically import and create WebLLM model
     const { CreateMLCEngine } = await import('@mlc-ai/web-llm');
     
-    // Use SmolLM2 as the default lightweight model
-    const defaultModel = modelName || 'SmolLM2-360M-Instruct-q4f16_1-MLC';
-    
-    // Create WebLLM engine
-    const engine = await CreateMLCEngine(defaultModel, {
+    // Create WebLLM engine with specified model
+    const engine = await CreateMLCEngine(modelName, {
       initProgressCallback: (report: any) => {
         console.log('[WebLLM]', report.text, report.progress ? `${Math.round(report.progress * 100)}%` : '');
       }
@@ -53,7 +57,7 @@ export async function createBuiltInAIProvider(modelName?: string): Promise<any> 
     return {
       specificationVersion: 'v1',
       provider: 'webllm',
-      modelId: defaultModel,
+      modelId: modelName,
       doGenerate: async (options: any) => {
         // AI SDK passes messages in options.prompt
         const messages = Array.isArray(options.prompt) ? options.prompt : 
@@ -89,8 +93,28 @@ export async function createBuiltInAIProvider(modelName?: string): Promise<any> 
 export async function getProviderModels(providerName: string): Promise<string[]> {
   try {
     switch (providerName) {
-      case 'built-in-ai':
-        return ['default']; // Built-in AI auto-detects
+      case 'built-in-ai': {
+        // Check if Prompt API is available
+        const hasPromptAPI = await isPromptAPIAvailable();
+        const models = [];
+        
+        if (hasPromptAPI) {
+          models.push('prompt-api');
+        }
+        
+        // Always include common WebLLM models
+        models.push(
+          'SmolLM2-360M-Instruct-q4f16_1-MLC',
+          'SmolLM2-1.7B-Instruct-q4f16_1-MLC',
+          'Llama-3.2-1B-Instruct-q4f16_1-MLC',
+          'Llama-3.2-3B-Instruct-q4f16_1-MLC',
+          'Phi-3.5-mini-instruct-q4f16_1-MLC',
+          'Qwen2.5-0.5B-Instruct-q4f16_1-MLC',
+          'Qwen2.5-1.5B-Instruct-q4f16_1-MLC',
+        );
+        
+        return models;
+      }
         
       case 'openai': {
         // Common OpenAI chat models (v2 API compatible)
@@ -136,10 +160,13 @@ export async function getProviderModels(providerName: string): Promise<string[]>
 /**
  * Get default model for a provider
  */
-export function getDefaultModel(providerName: string): string {
+export async function getDefaultModel(providerName: string): Promise<string> {
   switch (providerName) {
-    case 'built-in-ai':
-      return 'default';
+    case 'built-in-ai': {
+      // Check if Prompt API is available, otherwise use smallest WebLLM model
+      const hasPromptAPI = await isPromptAPIAvailable();
+      return hasPromptAPI ? 'prompt-api' : 'SmolLM2-360M-Instruct-q4f16_1-MLC';
+    }
     case 'openai':
       return 'gpt-4o-mini'; // Most economical v2 model
     case 'anthropic':

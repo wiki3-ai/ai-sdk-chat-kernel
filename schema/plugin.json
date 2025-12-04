@@ -27,8 +27,8 @@
     "defaultModel": {
       "type": "string",
       "title": "Default Model",
-      "description": "The model to use when the kernel is first initialized. Model names are provider-specific. Use %chat list in a notebook to see available providers.",
-      "default": "default"
+      "description": "The model to use when the kernel is first initialized. For built-in-ai: use 'prompt-api' for Chrome AI or WebLLM model names. Use %chat list <provider> to see available models.",
+      "default": "prompt-api"
     }
   },
   "additionalProperties": false

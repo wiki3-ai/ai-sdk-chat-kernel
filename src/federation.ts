@@ -26,13 +26,13 @@ function getDefaultProviderFromSettings(): string {
 /**
  * Get the default model from settings, or provider-specific default
  */
-function getDefaultModelFromSettings(providerName: string): string {
+async function getDefaultModelFromSettings(providerName: string): Promise<string> {
   // If settings specify a model, use it
   if (settingsDefaultModel) {
     return settingsDefaultModel;
   }
   // Otherwise use provider-specific default from providers.ts
-  return getDefaultModel(providerName);
+  return await getDefaultModel(providerName);
 }
 
 // Helper to get a module from the shared scope
@@ -192,7 +192,7 @@ const container = {
             const config = getProviderConfig(providerName);
             
             // Use provided model or get default for this provider
-            const model = modelName || getDefaultModel(providerName);
+            const model = modelName || await getDefaultModel(providerName);
 
             await this.initialize(providerName, model, apiKey);
             
@@ -229,7 +229,7 @@ const container = {
             // Initialize if not done yet
             if (!this.initialized) {
               const defaultProvider = getDefaultProviderFromSettings();
-              const defaultModel = getDefaultModelFromSettings(defaultProvider);
+              const defaultModel = await getDefaultModelFromSettings(defaultProvider);
               await this.initialize(defaultProvider, defaultModel);
               console.log(`[AIChatKernel] Auto-initialized with provider: ${defaultProvider}, model: ${defaultModel}`);
             }
@@ -325,11 +325,16 @@ Note:
                 let output = `${config.displayName} (${config.name}) Models:\n\n`;
                 
                 if (models.length > 0) {
-                  const defaultModel = getDefaultModel(specificProvider);
+                  const defaultModel = await getDefaultModel(specificProvider);
                   models.forEach((model: string) => {
                     const isDefault = model === defaultModel;
                     output += `  ${isDefault ? '• ' : '  '}${model}${isDefault ? ' (default)' : ''}\n`;
                   });
+                  
+                  // Add helpful note for built-in-ai provider
+                  if (specificProvider === 'built-in-ai') {
+                    output += '\nNote: "prompt-api" uses Chrome Built-in AI, others use WebLLM for local inference.\n';
+                  }
                 } else {
                   output += "  Accepts any model name\n";
                 }
@@ -338,7 +343,8 @@ Note:
                   output += `\nRequires API key: ${config.envVar || 'Set via %chat key'}\n`;
                 }
                 
-                output += `\nUsage: %chat provider ${specificProvider}${config.requiresApiKey ? ' --key <api-key>' : ''}`;
+                output += `\nUsage:\n  %chat provider ${specificProvider}${config.requiresApiKey ? ' --key <api-key>' : ''}\n`;
+                output += `  %chat model <model-name>\n`;
                 
                 return output;
               } else {
@@ -347,12 +353,12 @@ Note:
                 let output = "Available Providers:\n\n";
                 
                 for (const config of providers) {
-                  const defaultModel = getDefaultModel(config.name);
+                  const defaultModel = await getDefaultModel(config.name);
                   output += `• ${config.displayName} (${config.name})\n`;
                   output += `  Default model: ${defaultModel}\n`;
                   
                   if (config.isBuiltIn) {
-                    output += `  Type: Browser built-in (Chrome/Edge AI or WebLLM fallback)\n`;
+                    output += `  Type: Browser built-in (prompt-api) or local (WebLLM)\n`;
                   } else if (config.requiresApiKey) {
                     output += `  Requires API key${config.envVar ? `: ${config.envVar}` : ''}\n`;
                   }
@@ -361,8 +367,9 @@ Note:
                 
                 output += "Use '%chat list <provider>' to see models for a specific provider.\n";
                 output += "\nExamples:\n";
-                output += "  %chat list openai\n";
+                output += "  %chat list built-in-ai\n";
                 output += "  %chat provider built-in-ai\n";
+                output += "  %chat model prompt-api\n";
                 output += "  %chat provider openai --key sk-...\n";
                 
                 return output;
@@ -374,7 +381,7 @@ Note:
               const { provider, model } = this.chat.getConfig();
               if (!provider) {
                 const defProvider = getDefaultProviderFromSettings();
-                const defModel = getDefaultModelFromSettings(defProvider);
+                const defModel = await getDefaultModelFromSettings(defProvider);
                 return `Not yet initialized. Will use default: ${defProvider} with model ${defModel}`;
               }
               return `Current provider: ${provider}\nCurrent model: ${model}`;
