@@ -194,7 +194,7 @@ const container = {
            */
           setApiKey(key: string): void {
             this.apiKey = key;
-            console.log(`[AIChatKernel] API key set for provider: ${this.provider}`);
+            console.log(`[AIChatKernel] API key updated`);
           }
 
           /**
@@ -343,7 +343,7 @@ For local/server deployments, environment variables can be used:
             }
 
             // %chat key <api-key>
-            const keyMatch = trimmed.match(/^%chat\s+key\s+(.+)$/);
+            const keyMatch = trimmed.match(/^%chat\s+key\s+(\S+)$/);
             if (keyMatch) {
               const key = keyMatch[1].trim();
               this.chat.setApiKey(key);
@@ -351,7 +351,7 @@ For local/server deployments, environment variables can be used:
             }
 
             // %chat provider <name> [--key <api-key>]
-            const providerMatch = trimmed.match(/^%chat\s+provider\s+(\S+)(?:\s+--key\s+(.+))?$/);
+            const providerMatch = trimmed.match(/^%chat\s+provider\s+(\S+)(?:\s+--key\s+(\S+))?$/);
             if (providerMatch) {
               const providerName = providerMatch[1];
               const apiKey = providerMatch[2]?.trim();
