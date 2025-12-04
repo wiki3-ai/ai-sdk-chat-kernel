@@ -3,19 +3,16 @@
 
 import { type LanguageModel } from 'ai';
 
-declare const window: any;
-
 /**
  * Check if Chrome Built-in AI Prompt API is available
+ * Uses the built-in-ai/core package's detection which works in WebWorker context
  */
 export async function isPromptAPIAvailable(): Promise<boolean> {
   try {
-    // Check if window.ai is available (Chrome Built-in AI Prompt API)
-    if (typeof window !== 'undefined' && window.ai && window.ai.languageModel) {
-      const capabilities = await window.ai.languageModel.capabilities();
-      return capabilities && capabilities.available !== 'no';
-    }
-    return false;
+    // Use the built-in-ai/core package's built-in detection
+    // This works in WebWorker context where window may not be available
+    const { doesBrowserSupportBuiltInAI } = await import('@built-in-ai/core');
+    return doesBrowserSupportBuiltInAI();
   } catch (error) {
     console.log('[providers] Prompt API check failed:', error);
     return false;
