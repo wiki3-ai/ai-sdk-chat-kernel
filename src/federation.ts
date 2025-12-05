@@ -276,6 +276,32 @@ const container = {
           }
 
           /**
+           * Prompt the user for input using a password dialog.
+           * This prevents API keys from being visible in notebook cells.
+           */
+          private async promptForPassword(promptText: string): Promise<string> {
+            // Use Dialog.getPassword for secure input
+            const result = await (Dialog as any).getPassword({
+              title: 'API Key Required',
+              label: promptText,
+              okLabel: 'Set Key',
+              cancelLabel: 'Cancel'
+            });
+            
+            if (result.button.accept && result.value) {
+              return result.value;
+            }
+            return '';
+          }
+
+          /**
+           * Handle input reply from user (not used for password dialog approach)
+           */
+          inputReply(_content: any): void {
+            // No-op: we use Dialog.getPassword instead of stdin for API keys
+          }
+
+          /**
            * Handle %chat magic commands.
            */
           private async handleMagic(code: string): Promise<string | null> {
@@ -289,23 +315,25 @@ const container = {
               return `AI SDK Chat Kernel Magic Commands:
 
   %chat provider <name>           - Set provider (${providerList})
-  %chat provider <name> --key <k> - Set provider with API key
+  %chat provider <name> --key     - Set provider, prompt securely for API key
+  %chat provider <name> --key <k> - Set provider with API key (visible in cell)
   %chat model <name>              - Set model (provider-specific)
-  %chat key <api-key>             - Set API key for current provider
+  %chat key                       - Prompt securely for API key (recommended)
+  %chat key <api-key>             - Set API key (visible in cell - not recommended)
   %chat list                      - List available providers
   %chat status                    - Show current configuration
   %chat help                      - Show this help message
 
 Examples:
   %chat provider built-in-ai
-  %chat provider openai --key sk-proj-...
+  %chat provider openai --key     (prompts securely for key)
+  %chat key                       (prompts securely for key)
   %chat model gpt-4o
-  %chat key sk-...
 
 Note: 
 - The 'built-in-ai' provider uses Chrome Built-in AI if available, or WebLLM as fallback.
-- API keys must be provided via magic commands in browser environments.
-- Any model name can be specified; validation is done by the provider.`;
+- Use '%chat key' or '--key' without a value to enter keys securely (hidden input).
+- Avoid putting API keys directly in notebook cells as they will be saved in the file.`;
             }
 
             // %chat list [provider]
@@ -387,19 +415,37 @@ Note:
               return `Current provider: ${provider}\nCurrent model: ${model}`;
             }
 
-            // %chat key <api-key>
-            const keyMatch = trimmed.match(/^%chat\s+key\s+(\S+)$/);
+            // %chat key [api-key] - if no key provided, prompt securely
+            const keyMatch = trimmed.match(/^%chat\s+key(?:\s+(\S+))?$/);
             if (keyMatch) {
-              const key = keyMatch[1];
+              let key = keyMatch[1];
+              if (!key) {
+                // Prompt for key using password field (hidden input)
+                key = await this.promptForPassword('Enter API key: ');
+                if (!key || key.trim() === '') {
+                  return "API key entry cancelled (empty input).";
+                }
+              }
               this.chat.setApiKey(key);
               return "API key set successfully.";
             }
 
-            // %chat provider <name> [--key <api-key>]
-            const providerMatch = trimmed.match(/^%chat\s+provider\s+(\S+)(?:\s+--key\s+(\S+))?$/);
+            // %chat provider <name> [--key [api-key]]
+            // If --key is provided without a value, prompt securely for the key
+            const providerMatch = trimmed.match(/^%chat\s+provider\s+(\S+)(?:\s+--key(?:\s+(\S+))?)?$/);
             if (providerMatch) {
               const providerName = providerMatch[1];
-              const apiKey = providerMatch[2];
+              let apiKey = providerMatch[2];
+              const hasKeyFlag = trimmed.includes('--key');
+              
+              // If --key flag is present but no value, prompt for it
+              if (hasKeyFlag && !apiKey) {
+                apiKey = await this.promptForPassword(`Enter API key for ${providerName}: `);
+                if (!apiKey || apiKey.trim() === '') {
+                  return "Provider setup cancelled (empty API key).";
+                }
+              }
+              
               try {
                 const result = await this.chat.setProvider(providerName, undefined, apiKey);
                 return result;
@@ -531,7 +577,6 @@ Note:
             return { status: "ok", restart: false };
           }
 
-          async inputReply(_content: any): Promise<void> { }
           async commOpen(_content: any): Promise<void> { }
           async commMsg(_content: any): Promise<void> { }
           async commClose(_content: any): Promise<void> { }
