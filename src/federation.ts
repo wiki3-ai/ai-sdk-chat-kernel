@@ -114,7 +114,7 @@ const container = {
         // Import JupyterLab/JupyterLite modules from shared scope
         const { BaseKernel, IKernelSpecs } = await importShared('@jupyterlite/kernel');
         const { Widget } = await importShared('@lumino/widgets');
-        const { ReactWidget, showDialog, Dialog } = await importShared('@jupyterlab/apputils');
+        const { InputDialog } = await importShared('@jupyterlab/apputils');
         const React = await importShared('react');
 
         console.log("[ai-sdk-chat-kernel/federation] Got BaseKernel from shared scope:", BaseKernel);
@@ -341,9 +341,9 @@ const container = {
            * This prevents API keys from being visible in notebook cells.
            */
           private async promptForPassword(promptText: string): Promise<string> {
-            // Use Dialog.getPassword for secure input
-            const result = await (Dialog as any).getPassword({
-              title: 'API Key Required',
+            // Use InputDialog.getPassword for secure input
+            const result = await InputDialog.getPassword({
+              title: 'API Key',
               label: promptText,
               okLabel: 'Set Key',
               cancelLabel: 'Cancel'
