@@ -1,7 +1,7 @@
 [project]
-name = "webllm-chat-kernel"
-version = "0.2.5dev2"
-description = "WebLLM chat kernel for JupyterLite using @built-in-ai/web-llm"
+name = "ai-sdk-chat-kernel"
+version = "0.2.6dev7"
+description = "AI SDK chat kernel for JupyterLite using Vercel AI SDK"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
@@ -23,11 +23,11 @@ exclude = [
 artifacts = ["labextension"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["webllm_chat_kernel"]
+packages = ["ai_sdk_chat_kernel"]
 artifacts = ["labextension"]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"labextension" = "share/jupyter/labextensions/@wiki3-ai/webllm-chat-kernel"
+"labextension" = "share/jupyter/labextensions/@wiki3-ai/ai-sdk-chat-kernel"
 
 [tool.hatch.build.hooks.jupyter-builder]
 dependencies = ["hatch-jupyter-builder>=0.5"]

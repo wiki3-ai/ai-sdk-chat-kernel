@@ -1,25 +1,38 @@
 // src/federation.ts
-// Module Federation container for JupyterLite
+// Module Federation container for JupyterLite with AI SDK support
 
-import { CreateMLCEngine, type MLCEngineInterface, type InitProgressReport } from "@mlc-ai/web-llm";
-import { WEBLLM_MODELS, DEFAULT_WEBLLM_MODEL, isValidWebLLMModel } from "./models.js";
+import { streamText, type LanguageModel } from 'ai';
+import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, type ProviderConfig } from "./models.js";
+import { createProvider, getProviderModels, getDefaultModel } from "./providers.js";
 
 declare const window: any;
 
-console.log("[webllm-chat-kernel/federation] Setting up Module Federation container");
+console.log("[ai-sdk-chat-kernel/federation] Setting up Module Federation container");
 
-const scope = "@wiki3-ai/webllm-chat-kernel";
+const scope = "@wiki3-ai/ai-sdk-chat-kernel";
 let sharedScope: any = null;
 
-// Module-level storage for the settings-based default model
+// Module-level storage for settings
+let settingsDefaultProvider: string | null = null;
 let settingsDefaultModel: string | null = null;
 
 /**
- * Get the default model from settings, falling back to the hardcoded default.
- * This is called when the kernel is first initialized.
+ * Get the default provider from settings, falling back to the hardcoded default.
  */
-function getDefaultModel(): string {
-  return settingsDefaultModel ?? DEFAULT_WEBLLM_MODEL;
+function getDefaultProviderFromSettings(): string {
+  return settingsDefaultProvider ?? DEFAULT_PROVIDER;
+}
+
+/**
+ * Get the default model from settings, or provider-specific default
+ */
+async function getDefaultModelFromSettings(providerName: string): Promise<string> {
+  // If settings specify a model, use it
+  if (settingsDefaultModel) {
+    return settingsDefaultModel;
+  }
+  // Otherwise use provider-specific default from providers.ts
+  return await getDefaultModel(providerName);
 }
 
 // Helper to get a module from the shared scope
@@ -28,22 +41,22 @@ async function importShared(pkg: string): Promise<any> {
     // Fallback to global webpack share scope if available
     // @ts-ignore
     if (window.__webpack_share_scopes__ && window.__webpack_share_scopes__.default) {
-      console.warn(`[webllm-chat-kernel] Using global __webpack_share_scopes__.default for ${pkg}`);
+      console.warn(`[ai-sdk-chat-kernel] Using global __webpack_share_scopes__.default for ${pkg}`);
       // @ts-ignore
       sharedScope = window.__webpack_share_scopes__.default;
     } else {
-      throw new Error(`[webllm-chat-kernel] Shared scope not initialized when requesting ${pkg}`);
+      throw new Error(`[ai-sdk-chat-kernel] Shared scope not initialized when requesting ${pkg}`);
     }
   }
 
   const versions = sharedScope[pkg];
   if (!versions) {
-    throw new Error(`[webllm-chat-kernel] Shared module ${pkg} not found in shared scope. Available: ${Object.keys(sharedScope)}`);
+    throw new Error(`[ai-sdk-chat-kernel] Shared module ${pkg} not found in shared scope. Available: ${Object.keys(sharedScope)}`);
   }
 
   const versionKeys = Object.keys(versions);
   if (versionKeys.length === 0) {
-    throw new Error(`[webllm-chat-kernel] No versions available for ${pkg}`);
+    throw new Error(`[ai-sdk-chat-kernel] No versions available for ${pkg}`);
   }
 
   // Pick the first available version
@@ -51,7 +64,7 @@ async function importShared(pkg: string): Promise<any> {
   const factory = version?.get;
 
   if (typeof factory !== "function") {
-    throw new Error(`[webllm-chat-kernel] Module ${pkg} has no factory function`);
+    throw new Error(`[ai-sdk-chat-kernel] Module ${pkg} has no factory function`);
   }
 
   // Factory might return a Promise or the module directly
@@ -67,224 +80,338 @@ async function importShared(pkg: string): Promise<any> {
     result = result();
   }
 
-  console.log(`[webllm-chat-kernel] Loaded ${pkg}:`, result);
+  console.log(`[ai-sdk-chat-kernel] Loaded ${pkg}:`, result);
   return result;
 }
 
 // Module Federation container API
 const container = {
   init: (scope: any) => {
-    console.log("[webllm-chat-kernel/federation] init() called, storing shared scope");
+    console.log("[ai-sdk-chat-kernel/federation] init() called, storing shared scope");
     sharedScope = scope;
     return Promise.resolve();
   },
 
   get: async (module: string) => {
-    console.log("[webllm-chat-kernel/federation] get() called for module:", module);
-    console.log("[webllm-chat-kernel/federation] This means JupyterLite is requesting our plugin!");
+    console.log("[ai-sdk-chat-kernel/federation] get() called for module:", module);
+    console.log("[ai-sdk-chat-kernel/federation] This means JupyterLite is requesting our plugin!");
 
     // JupyterLite may request either "./index" or "./extension"
     if (module === "./index" || module === "./extension") {
       // Lazy-load our plugin module, which will pull from shared scope
       return async () => {
-        console.log("[webllm-chat-kernel/federation] ===== LOADING PLUGIN MODULE =====");
-        console.log("[webllm-chat-kernel/federation] Loading plugins from shared scope...");
+        console.log("[ai-sdk-chat-kernel/federation] ===== LOADING PLUGIN MODULE =====");
+        console.log("[ai-sdk-chat-kernel/federation] Loading plugins from shared scope...");
 
         // Import JupyterLab/JupyterLite modules from shared scope
         const { BaseKernel, IKernelSpecs } = await importShared('@jupyterlite/kernel');
         const { Widget } = await importShared('@lumino/widgets');
-
         const { ReactWidget, showDialog, Dialog } = await importShared('@jupyterlab/apputils');
         const React = await importShared('react');
-        const { HTMLSelect } = await importShared('@jupyterlab/ui-components');
 
+        console.log("[ai-sdk-chat-kernel/federation] Got BaseKernel from shared scope:", BaseKernel);
 
-        console.log("[webllm-chat-kernel/federation] Got BaseKernel from shared scope:", BaseKernel);
-
-        // Define WebLLM-backed Chat kernel inline (browser-only, no HTTP)
-        class WebLLMChatKernel {
+        /**
+         * Chat kernel using Vercel AI SDK
+         */
+        class AIChatKernel {
+          private provider: string | null = null;
           private modelName: string | null = null;
-          private engine: MLCEngineInterface | null = null;
+          private apiKey: string | null = null;
           private initialized: boolean = false;
-          private initializationPromise: Promise<void> | null = null;
+          private languageModel: any | null = null;
 
           constructor() {
-            // Model initialization is deferred until first send() call
-            console.log("[WebLLMChatKernel] Created (model initialization deferred until first execution)");
+            console.log("[AIChatKernel] Created (initialization deferred until first execution)");
           }
 
           /**
-           * Initialize the model. Called on first send() or when explicitly setting a model.
+           * Get API key from stored key only (browser environment doesn't have access to env vars)
+           * Environment variables would need to be injected at build time, which is not recommended
+           * for security reasons in browser contexts.
            */
-          private async initializeModel(modelName: string): Promise<void> {
-            if (!isValidWebLLMModel(modelName)) {
-              throw new Error(`Invalid model: ${modelName}. Use %chat list to see available models.`);
+          private getApiKey(providerName: string): string | null {
+            // Check if we have a stored key for the current provider
+            if (this.apiKey && this.provider === providerName) {
+              return this.apiKey;
             }
 
-            // If already initializing the same model, wait for that
-            if (this.initializationPromise && this.modelName === modelName) {
-              await this.initializationPromise;
-              return;
-            }
-
-            // If initializing a different model, wait for current initialization to complete first
-            if (this.initializationPromise) {
-              await this.initializationPromise;
-            }
-
-            this.modelName = modelName;
-            
-            const initProgressCallback = (report: InitProgressReport) => {
-              if (typeof window !== "undefined") {
-                window.dispatchEvent(
-                  new CustomEvent("webllm:model-progress", { detail: report })
-                );
-              }
-            };
-
-            this.initializationPromise = CreateMLCEngine(this.modelName, {
-              initProgressCallback,
-            }).then((engine: MLCEngineInterface) => {
-              this.engine = engine;
-              this.initialized = true;
-              console.log("[WebLLMChatKernel] Initialized with model:", this.modelName);
-            });
-
-            await this.initializationPromise;
-            this.initializationPromise = null;
+            // In browser environments, we don't have access to process.env at runtime
+            // Users must provide API keys via magic commands:
+            // - %chat provider <name> --key <api-key>
+            // - %chat key <api-key>
+            return null;
           }
 
           /**
-           * Set or change the model. Can be called via %chat model magic.
-           * If the model is already initialized, this will reinitialize with the new model.
+           * Initialize or reinitialize with a provider and model
+           */
+          async initialize(providerName: string, modelName: string, apiKey?: string): Promise<void> {
+            // Store the configuration
+            this.provider = providerName;
+            this.modelName = modelName;
+            if (apiKey) {
+              this.apiKey = apiKey;
+            }
+
+            // Get API key
+            let key = this.getApiKey(providerName);
+            const config = getProviderConfig(providerName);
+
+            // Check if API key is required but not provided
+            if (!key && config?.requiresApiKey) {
+              throw new Error(`API key required for ${providerName}. Provide it using:\n  %chat provider ${providerName} --key <your-api-key>\nOr set it separately:\n  %chat key <your-api-key>`);
+            }
+
+            // Create language model using dynamic provider system
+            try {
+              this.languageModel = await createProvider(providerName, modelName, key ?? undefined);
+              this.initialized = true;
+              console.log(`[AIChatKernel] Initialized with provider: ${providerName}, model: ${modelName}`);
+            } catch (error: any) {
+              throw new Error(`Failed to initialize provider ${providerName}: ${error.message}`);
+            }
+          }
+
+          /**
+           * Set API key for current provider
+           */
+          setApiKey(key: string): void {
+            // Validate API key format (no whitespace)
+            if (!key || /\s/.test(key)) {
+              throw new Error("Invalid API key format. API keys should not contain whitespace.");
+            }
+            this.apiKey = key;
+            console.log(`[AIChatKernel] API key updated`);
+          }
+
+          /**
+           * Set provider (and optionally model and API key)
+           */
+          async setProvider(providerName: string, modelName?: string, apiKey?: string): Promise<string> {
+            const config = getProviderConfig(providerName);
+            
+            // Use provided model or get default for this provider
+            const model = modelName || await getDefaultModel(providerName);
+
+            await this.initialize(providerName, model, apiKey);
+            
+            const displayName = config?.displayName || providerName;
+            return `Provider set to: ${displayName} (${model})`;
+          }
+
+          /**
+           * Set model for current provider
            */
           async setModel(modelName: string): Promise<string> {
-            if (!isValidWebLLMModel(modelName)) {
-              throw new Error(`Invalid model: ${modelName}`);
-            }
-            
-            const wasInitialized = this.initialized;
-            
-            // Unload previous model if any
-            if (this.engine) {
-              await this.engine.unload();
-              this.engine = null;
-              this.initialized = false;
-              this.initializationPromise = null;
+            if (!this.provider) {
+              throw new Error("No provider set. Use %chat provider <name> first.");
             }
 
-            await this.initializeModel(modelName);
-            
-            if (wasInitialized) {
-              return `Model changed to: ${modelName}`;
-            } else {
-              return `Model set to: ${modelName}`;
-            }
+            await this.initialize(this.provider, modelName, this.apiKey || undefined);
+            return `Model changed to: ${modelName}`;
           }
 
           /**
-           * Get the current model name, or null if not yet initialized.
+           * Get current configuration
            */
-          getModelName(): string | null {
-            return this.modelName;
+          getConfig(): { provider: string | null; model: string | null } {
+            return {
+              provider: this.provider,
+              model: this.modelName,
+            };
           }
 
           /**
-           * Check if the model has been initialized.
+           * Send a message and stream the response
            */
-          isInitialized(): boolean {
-            return this.initialized;
-          }
-
           async send(prompt: string, onChunk?: (chunk: string) => void): Promise<string> {
-            // Initialize model on first send if not already done
-            if (!this.initialized || !this.engine) {
-              const defaultModel = getDefaultModel();
-              await this.initializeModel(defaultModel);
-              console.log("[WebLLMChatKernel] Auto-initialized with settings default:", defaultModel);
+            // Initialize if not done yet
+            if (!this.initialized) {
+              const defaultProvider = getDefaultProviderFromSettings();
+              const defaultModel = await getDefaultModelFromSettings(defaultProvider);
+              await this.initialize(defaultProvider, defaultModel);
+              console.log(`[AIChatKernel] Auto-initialized with provider: ${defaultProvider}, model: ${defaultModel}`);
             }
 
-            // After initialization, engine should be available
-            if (!this.engine) {
-              throw new Error("Failed to initialize WebLLM engine");
+            if (!this.languageModel) {
+              throw new Error("Language model not initialized");
             }
 
             console.log(
-              "[WebLLMChatKernel] Sending prompt to WebLLM:",
+              "[AIChatKernel] Sending prompt:",
               prompt,
-              "using model:",
+              "using provider:",
+              this.provider,
+              "model:",
               this.modelName
             );
 
-            // Use the streaming chat completion API
-            const stream = await this.engine.chat.completions.create({
-              messages: [{ role: "user", content: prompt }],
-              stream: true,
+            // Use streamText from AI SDK
+            const result = await streamText({
+              model: this.languageModel,
+              prompt: prompt,
             });
 
-            let reply = "";
-            for await (const chunk of stream) {
-              const content = chunk.choices?.[0]?.delta?.content || "";
-              if (content) {
-                reply += content;
-                if (onChunk) {
-                  onChunk(content);
-                }
+            let fullText = "";
+            for await (const textPart of result.textStream) {
+              fullText += textPart;
+              if (onChunk) {
+                onChunk(textPart);
               }
             }
 
-            console.log("[WebLLMChatKernel] Got reply from WebLLM:", reply);
-            return reply;
+            console.log("[AIChatKernel] Got reply:", fullText);
+            return fullText;
           }
         }
 
-        // Define WebLLMLiteKernel extending BaseKernel
-        class WebLLMLiteKernel extends BaseKernel {
-          private chat: WebLLMChatKernel;
+        // Define AISdkLiteKernel extending BaseKernel
+        class AISdkLiteKernel extends BaseKernel {
+          private chat: AIChatKernel;
 
           constructor(options: any) {
             super(options);
-            this.chat = new WebLLMChatKernel();
+            this.chat = new AIChatKernel();
           }
 
           /**
            * Handle %chat magic commands.
-           * Returns the response text if a magic was handled, or null if not a magic command.
            */
           private async handleMagic(code: string): Promise<string | null> {
             const trimmed = code.trim();
-            
-            // %chat list [filter] - list all models, optionally filtered
-            const listMatch = trimmed.match(/^%chat\s+list(?:\s+(.+))?$/);
+
+            // %chat help
+            if (trimmed === "%chat" || trimmed === "%chat help") {
+              const providers = getAllProviders();
+              const providerList = providers.map(p => p.name).join(', ');
+              
+              return `AI SDK Chat Kernel Magic Commands:
+
+  %chat provider <name>           - Set provider (${providerList})
+  %chat provider <name> --key <k> - Set provider with API key
+  %chat model <name>              - Set model (provider-specific)
+  %chat key <api-key>             - Set API key for current provider
+  %chat list                      - List available providers
+  %chat status                    - Show current configuration
+  %chat help                      - Show this help message
+
+Examples:
+  %chat provider built-in-ai
+  %chat provider openai --key sk-proj-...
+  %chat model gpt-4o
+  %chat key sk-...
+
+Note: 
+- The 'built-in-ai' provider uses Chrome Built-in AI if available, or WebLLM as fallback.
+- API keys must be provided via magic commands in browser environments.
+- Any model name can be specified; validation is done by the provider.`;
+            }
+
+            // %chat list [provider]
+            const listMatch = trimmed.match(/^%chat\s+list(?:\s+(\S+))?$/);
             if (listMatch || trimmed === "%chat list") {
-              const filter = listMatch?.[1]?.toLowerCase() || "";
-              const filtered = filter 
-                ? WEBLLM_MODELS.filter(m => m.toLowerCase().includes(filter))
-                : WEBLLM_MODELS;
+              const specificProvider = listMatch?.[1];
               
-              if (filtered.length === 0) {
-                return `No models found matching "${filter}".\n\nUse "%chat list" to see all ${WEBLLM_MODELS.length} available models.`;
+              if (specificProvider) {
+                // List models for a specific provider
+                const models = await getProviderModels(specificProvider);
+                const config = getProviderConfig(specificProvider);
+                
+                if (!config) {
+                  return `Unknown provider: ${specificProvider}\n\nUse "%chat list" to see available providers.`;
+                }
+                
+                let output = `${config.displayName} (${config.name}) Models:\n\n`;
+                
+                if (models.length > 0) {
+                  const defaultModel = await getDefaultModel(specificProvider);
+                  models.forEach((model: string) => {
+                    const isDefault = model === defaultModel;
+                    output += `  ${isDefault ? '• ' : '  '}${model}${isDefault ? ' (default)' : ''}\n`;
+                  });
+                  
+                  // Add helpful note for built-in-ai provider
+                  if (specificProvider === 'built-in-ai') {
+                    output += '\nNote: "prompt-api" uses Chrome Built-in AI, others use WebLLM for local inference.\n';
+                  }
+                } else {
+                  output += "  Accepts any model name\n";
+                }
+                
+                if (config.requiresApiKey) {
+                  output += `\nRequires API key: ${config.envVar || 'Set via %chat key'}\n`;
+                }
+                
+                output += `\nUsage:\n  %chat provider ${specificProvider}${config.requiresApiKey ? ' --key <api-key>' : ''}\n`;
+                output += `  %chat model <model-name>\n`;
+                
+                return output;
+              } else {
+                // List all providers
+                const providers = getAllProviders();
+                let output = "Available Providers:\n\n";
+                
+                for (const config of providers) {
+                  const defaultModel = await getDefaultModel(config.name);
+                  output += `• ${config.displayName} (${config.name})\n`;
+                  output += `  Default model: ${defaultModel}\n`;
+                  
+                  if (config.isBuiltIn) {
+                    output += `  Type: Browser built-in (prompt-api) or local (WebLLM)\n`;
+                  } else if (config.requiresApiKey) {
+                    output += `  Requires API key${config.envVar ? `: ${config.envVar}` : ''}\n`;
+                  }
+                  output += "\n";
+                }
+                
+                output += "Use '%chat list <provider>' to see models for a specific provider.\n";
+                output += "\nExamples:\n";
+                output += "  %chat list built-in-ai\n";
+                output += "  %chat provider built-in-ai\n";
+                output += "  %chat model prompt-api\n";
+                output += "  %chat provider openai --key sk-...\n";
+                
+                return output;
               }
-              
-              const modelList = filtered.join("\n  ");
-              const header = filter 
-                ? `Models matching "${filter}" (${filtered.length} of ${WEBLLM_MODELS.length}):`
-                : `All available models (${WEBLLM_MODELS.length}):`;
-              return `${header}\n  ${modelList}\n\nUse "%chat model <name>" to switch models.`;
             }
-            
-            // %chat model [name] - show current model or set model
-            if (trimmed === "%chat model" || trimmed === "%chat models") {
-              const current = this.chat.getModelName();
-              const status = this.chat.isInitialized() 
-                ? `Current model: ${current}` 
-                : `Model not yet initialized. Default: ${getDefaultModel()}`;
-              return `${status}\n\nUse "%chat list" to see all available models.\nUse "%chat list <filter>" to filter by name (e.g., "%chat list llama").\nUse "%chat model <name>" to switch models.`;
+
+            // %chat status
+            if (trimmed === "%chat status") {
+              const { provider, model } = this.chat.getConfig();
+              if (!provider) {
+                const defProvider = getDefaultProviderFromSettings();
+                const defModel = await getDefaultModelFromSettings(defProvider);
+                return `Not yet initialized. Will use default: ${defProvider} with model ${defModel}`;
+              }
+              return `Current provider: ${provider}\nCurrent model: ${model}`;
             }
-            
-            const modelMatch = trimmed.match(/^%chat\s+model\s+(\S+)$/);
+
+            // %chat key <api-key>
+            const keyMatch = trimmed.match(/^%chat\s+key\s+(\S+)$/);
+            if (keyMatch) {
+              const key = keyMatch[1];
+              this.chat.setApiKey(key);
+              return "API key set successfully.";
+            }
+
+            // %chat provider <name> [--key <api-key>]
+            const providerMatch = trimmed.match(/^%chat\s+provider\s+(\S+)(?:\s+--key\s+(\S+))?$/);
+            if (providerMatch) {
+              const providerName = providerMatch[1];
+              const apiKey = providerMatch[2];
+              try {
+                const result = await this.chat.setProvider(providerName, undefined, apiKey);
+                return result;
+              } catch (err: any) {
+                throw new Error(`${err.message}\n\nUse "%chat list" to see available providers.`);
+              }
+            }
+
+            // %chat model <name>
+            const modelMatch = trimmed.match(/^%chat\s+model\s+(.+)$/);
             if (modelMatch) {
-              const modelName = modelMatch[1];
+              const modelName = modelMatch[1].trim();
               try {
                 const result = await this.chat.setModel(modelName);
                 return result;
@@ -292,21 +419,7 @@ const container = {
                 throw new Error(`${err.message}\n\nUse "%chat list" to see available models.`);
               }
             }
-            
-            // %chat help
-            if (trimmed === "%chat" || trimmed === "%chat help") {
-              return `WebLLM Chat Kernel Magic Commands:
 
-  %chat model            - Show current model
-  %chat model <name>     - Switch to a different model
-  %chat list             - List all available models
-  %chat list <filter>    - List models matching filter (e.g., "%chat list llama")
-  %chat help             - Show this help message
-
-The model is initialized on first cell execution using the default from Settings.
-After initialization, use "%chat model <name>" to switch models.`;
-            }
-            
             return null; // Not a magic command
           }
 
@@ -331,7 +444,7 @@ After initialization, use "%chat model <name>" to switch models.`;
                 };
               }
 
-              // Stream each chunk as it arrives using the stream() method for stdout
+              // Stream each chunk as it arrives
               await this.chat.send(code, (chunk: string) => {
                 // @ts-ignore
                 this.stream(
@@ -375,7 +488,7 @@ After initialization, use "%chat model <name>" to switch models.`;
             return {
               status: "ok",
               protocol_version: "5.3",
-              implementation: "webllm-lite-kernel",
+              implementation: "ai-sdk-lite-kernel",
               implementation_version: "0.1.0",
               language_info: {
                 name: "markdown",
@@ -383,7 +496,7 @@ After initialization, use "%chat model <name>" to switch models.`;
                 mimetype: "text/markdown",
                 file_extension: ".md",
               },
-              banner: "WebLLM-backed browser chat kernel",
+              banner: "AI SDK-backed browser chat kernel",
               help_links: [],
             };
           }
@@ -423,352 +536,90 @@ After initialization, use "%chat model <name>" to switch models.`;
           async commMsg(_content: any): Promise<void> { }
           async commClose(_content: any): Promise<void> { }
         }
+
         // Try to get ISettingRegistry from shared scope (optional)
         let ISettingRegistry: any = null;
         try {
           const settingModule = await importShared('@jupyterlab/settingregistry');
           ISettingRegistry = settingModule.ISettingRegistry;
-          console.log("[webllm-chat-kernel] Got ISettingRegistry from shared scope");
+          console.log("[ai-sdk-chat-kernel] Got ISettingRegistry from shared scope");
         } catch (e) {
-          console.warn("[webllm-chat-kernel] ISettingRegistry not available, using defaults");
-        }
-
-        // Try to get IFormRendererRegistry from shared scope (optional)
-        let IFormRendererRegistry: any = null;
-        try {
-          const uiModule = await importShared('@jupyterlab/ui-components');
-          IFormRendererRegistry = uiModule.IFormRendererRegistry;
-          console.log("[webllm-chat-kernel] Got IFormRendererRegistry from shared scope");
-        } catch (e) {
-          console.warn("[webllm-chat-kernel] IFormRendererRegistry not available");
+          console.warn("[ai-sdk-chat-kernel] ISettingRegistry not available, using defaults");
         }
 
         // Define and return the plugin
-        const webllmChatKernelPlugin = {
-          id: "@wiki3-ai/webllm-chat-kernel:plugin",
+        const aiSdkChatKernelPlugin = {
+          id: "@wiki3-ai/ai-sdk-chat-kernel:plugin",
           autoStart: true,
-          // Match the official JupyterLite custom kernel pattern:
-          // https://jupyterlite.readthedocs.io/en/latest/howto/extensions/kernel.html
           requires: [IKernelSpecs],
-          optional: [ISettingRegistry, IFormRendererRegistry].filter(Boolean),
-          activate: async (app: any, kernelspecs: any, settingRegistry?: any, formRendererRegistry?: any) => {
-            console.log("[webllm-chat-kernel] ===== ACTIVATE FUNCTION CALLED =====");
-            console.log("[webllm-chat-kernel] JupyterLab app:", app);
-            console.log("[webllm-chat-kernel] kernelspecs service:", kernelspecs);
-            console.log("[webllm-chat-kernel] settingRegistry:", settingRegistry);
-            console.log("[webllm-chat-kernel] formRendererRegistry:", formRendererRegistry);
+          optional: [ISettingRegistry].filter(Boolean),
+          activate: async (app: any, kernelspecs: any, settingRegistry?: any) => {
+            console.log("[ai-sdk-chat-kernel] ===== ACTIVATE FUNCTION CALLED =====");
+            console.log("[ai-sdk-chat-kernel] JupyterLab app:", app);
+            console.log("[ai-sdk-chat-kernel] kernelspecs service:", kernelspecs);
+            console.log("[ai-sdk-chat-kernel] settingRegistry:", settingRegistry);
 
             // Load settings if available
             if (settingRegistry) {
               try {
-                const settings = await settingRegistry.load("@wiki3-ai/webllm-chat-kernel:plugin");
+                const settings = await settingRegistry.load("@wiki3-ai/ai-sdk-chat-kernel:plugin");
                 const updateSettings = () => {
+                  const provider = settings.get("defaultProvider").composite as string;
                   const model = settings.get("defaultModel").composite as string;
-                  if (model && isValidWebLLMModel(model)) {
+                  
+                  if (provider) {
+                    settingsDefaultProvider = provider;
+                    console.log("[ai-sdk-chat-kernel] Default provider from settings:", provider);
+                  }
+                  
+                  if (model) {
                     settingsDefaultModel = model;
-                    console.log("[webllm-chat-kernel] Settings loaded, default model:", model);
+                    console.log("[ai-sdk-chat-kernel] Default model from settings:", model);
                   }
                 };
                 updateSettings();
                 settings.changed.connect(updateSettings);
               } catch (e) {
-                console.warn("[webllm-chat-kernel] Failed to load settings:", e);
-              }
-            }
-
-            // Register custom form renderer for the model selection dropdown
-            if (formRendererRegistry) {
-              try {
-                const PLUGIN_ID = "@wiki3-ai/webllm-chat-kernel:plugin";
-                const ModelSelectorField = (props: any) => {
-                  const { schema, formData, onChange } = props;
-                  const [filterText, setFilterText] = React.useState('');
-                  const [isOpen, setIsOpen] = React.useState(false);
-                  const containerRef = React.useRef(null);
-                  
-                  // Filter models based on search text
-                  const filteredModels = React.useMemo(() => {
-                    if (!filterText) return WEBLLM_MODELS;
-                    const lower = filterText.toLowerCase();
-                    return WEBLLM_MODELS.filter((m: string) => m.toLowerCase().includes(lower));
-                  }, [filterText]);
-
-                  // Handle click outside to close dropdown
-                  React.useEffect(() => {
-                    const handleClickOutside = (event: MouseEvent) => {
-                      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-                        setIsOpen(false);
-                      }
-                    };
-                    document.addEventListener('mousedown', handleClickOutside);
-                    return () => document.removeEventListener('mousedown', handleClickOutside);
-                  }, []);
-
-                  const handleSelect = (model: string) => {
-                    onChange(model);
-                    setIsOpen(false);
-                    setFilterText('');
-                  };
-
-                  return React.createElement('div', { 
-                    className: 'jp-FormGroup-contentNormal',
-                    style: { position: 'relative' }
-                  },
-                    React.createElement('h3', { 
-                      className: 'jp-FormGroup-fieldLabel jp-FormGroup-contentItem' 
-                    }, schema.title || 'Default Model'),
-                    schema.description && React.createElement('div', { 
-                      className: 'jp-FormGroup-description' 
-                    }, schema.description),
-                    React.createElement('div', { 
-                      ref: containerRef,
-                      style: { position: 'relative' } 
-                    },
-                      // Input field showing current value, acts as search when open
-                      React.createElement('input', {
-                        type: 'text',
-                        className: 'jp-mod-styled',
-                        style: { 
-                          width: '100%', 
-                          padding: '4px 8px',
-                          boxSizing: 'border-box'
-                        },
-                        value: isOpen ? filterText : (formData || ''),
-                        placeholder: isOpen ? 'Type to filter models...' : 'Click to select a model',
-                        onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
-                          if (isOpen) {
-                            setFilterText(e.target.value);
-                          }
-                        },
-                        onFocus: () => setIsOpen(true),
-                        onKeyDown: (e: React.KeyboardEvent) => {
-                          if (e.key === 'Escape') {
-                            setIsOpen(false);
-                            setFilterText('');
-                          } else if (e.key === 'Enter' && filteredModels.length > 0) {
-                            handleSelect(filteredModels[0]);
-                          }
-                        }
-                      }),
-                      // Dropdown list
-                      isOpen && React.createElement('div', {
-                        style: {
-                          position: 'absolute',
-                          top: '100%',
-                          left: 0,
-                          right: 0,
-                          maxHeight: '300px',
-                          overflowY: 'auto',
-                          backgroundColor: 'var(--jp-layout-color1)',
-                          border: '1px solid var(--jp-border-color1)',
-                          borderRadius: '2px',
-                          zIndex: 1000,
-                          boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
-                        }
-                      },
-                        filteredModels.length === 0 
-                          ? React.createElement('div', {
-                              style: { 
-                                padding: '8px 12px', 
-                                color: 'var(--jp-ui-font-color2)',
-                                fontStyle: 'italic'
-                              }
-                            }, 'No matching models')
-                          : filteredModels.map((model: string, index: number) => 
-                              React.createElement('div', {
-                                key: model,
-                                style: {
-                                  padding: '6px 12px',
-                                  cursor: 'pointer',
-                                  backgroundColor: model === formData 
-                                    ? 'var(--jp-brand-color3)' 
-                                    : 'transparent',
-                                  borderBottom: index < filteredModels.length - 1 
-                                    ? '1px solid var(--jp-border-color2)' 
-                                    : 'none'
-                                },
-                                onMouseEnter: (e: React.MouseEvent<HTMLDivElement>) => {
-                                  (e.target as HTMLDivElement).style.backgroundColor = 'var(--jp-layout-color2)';
-                                },
-                                onMouseLeave: (e: React.MouseEvent<HTMLDivElement>) => {
-                                  (e.target as HTMLDivElement).style.backgroundColor = 
-                                    model === formData ? 'var(--jp-brand-color3)' : 'transparent';
-                                },
-                                onClick: () => handleSelect(model)
-                              }, model)
-                            )
-                      )
-                    ),
-                    // Show current selection below
-                    formData && React.createElement('div', {
-                      style: { 
-                        marginTop: '4px', 
-                        fontSize: '12px',
-                        color: 'var(--jp-ui-font-color2)'
-                      }
-                    }, `Selected: ${formData}`)
-                  );
-                };
-
-                formRendererRegistry.addRenderer(
-                  `${PLUGIN_ID}.defaultModel`,
-                  { fieldRenderer: ModelSelectorField }
-                );
-                console.log("[webllm-chat-kernel] Registered custom model selector renderer");
-              } catch (e) {
-                console.warn("[webllm-chat-kernel] Failed to register form renderer:", e);
+                console.warn("[ai-sdk-chat-kernel] Failed to load settings:", e);
               }
             }
 
             if (!kernelspecs || typeof kernelspecs.register !== "function") {
-              console.error("[webllm-chat-kernel] ERROR: kernelspecs.register not available!");
+              console.error("[ai-sdk-chat-kernel] ERROR: kernelspecs.register not available!");
               return;
             }
 
             try {
               kernelspecs.register({
                 spec: {
-                  name: "webllm-chat",
-                  display_name: "WebLLM Chat",
+                  name: "ai-sdk-chat",
+                  display_name: "AI SDK Chat",
                   language: "python",
                   argv: [],
                   resources: {},
                 },
                 create: async (options: any) => {
-                  console.log("[webllm-chat-kernel] Creating WebLLMLiteKernel instance", options);
-                  return new WebLLMLiteKernel(options);
+                  console.log("[ai-sdk-chat-kernel] Creating AISdkLiteKernel instance", options);
+                  return new AISdkLiteKernel(options);
                 },
               });
 
-              console.log("[webllm-chat-kernel] ===== KERNEL REGISTERED SUCCESSFULLY =====");
-              console.log("[webllm-chat-kernel] Kernel name: webllm-chat");
-              console.log("[webllm-chat-kernel] Display name: WebLLM Chat");
+              console.log("[ai-sdk-chat-kernel] ===== KERNEL REGISTERED SUCCESSFULLY =====");
+              console.log("[ai-sdk-chat-kernel] Kernel name: ai-sdk-chat");
+              console.log("[ai-sdk-chat-kernel] Display name: AI SDK Chat");
             } catch (error) {
-              console.error("[webllm-chat-kernel] ===== REGISTRATION ERROR =====", error);
+              console.error("[ai-sdk-chat-kernel] ===== REGISTRATION ERROR =====", error);
             }
 
-            // Add command to open WebLLM settings
-            const SETTINGS_COMMAND = "webllm-chat-kernel:open-settings";
+            // Add command to open settings
+            const SETTINGS_COMMAND = "ai-sdk-chat-kernel:open-settings";
             
-            // Create a custom dialog widget for model selection
-            class ModelSelectorDialogBody extends Widget {
-              private _select: HTMLSelectElement;
-              private _filter: HTMLInputElement;
-              private _modelList: HTMLDivElement;
-              private _selectedModel: string;
-              private _allModels: string[];
-              
-              constructor(currentModel: string) {
-                super();
-                this._selectedModel = currentModel;
-                this._allModels = WEBLLM_MODELS;
-                
-                this.node.style.cssText = 'min-width: 400px; padding: 12px;';
-                
-                // Create filter input
-                const filterLabel = document.createElement('label');
-                filterLabel.textContent = 'Filter models:';
-                filterLabel.style.cssText = 'display: block; margin-bottom: 4px; font-weight: 500;';
-                this.node.appendChild(filterLabel);
-                
-                this._filter = document.createElement('input');
-                this._filter.type = 'text';
-                this._filter.placeholder = 'Type to filter...';
-                this._filter.className = 'jp-mod-styled';
-                this._filter.style.cssText = 'width: 100%; padding: 8px; margin-bottom: 12px; box-sizing: border-box;';
-                this._filter.addEventListener('input', () => this._updateList());
-                this.node.appendChild(this._filter);
-                
-                // Create model list container
-                const listLabel = document.createElement('label');
-                listLabel.textContent = 'Select model:';
-                listLabel.style.cssText = 'display: block; margin-bottom: 4px; font-weight: 500;';
-                this.node.appendChild(listLabel);
-                
-                this._modelList = document.createElement('div');
-                this._modelList.style.cssText = 'max-height: 300px; overflow-y: auto; border: 1px solid var(--jp-border-color1); border-radius: 4px;';
-                this.node.appendChild(this._modelList);
-                
-                // Hidden select for form value
-                this._select = document.createElement('select');
-                this._select.style.display = 'none';
-                this.node.appendChild(this._select);
-                
-                // Current selection display
-                const currentLabel = document.createElement('div');
-                currentLabel.style.cssText = 'margin-top: 12px; padding: 8px; background: var(--jp-layout-color2); border-radius: 4px;';
-                currentLabel.innerHTML = `<strong>Current:</strong> <span id="current-model">${currentModel}</span>`;
-                this.node.appendChild(currentLabel);
-                
-                this._updateList();
-                
-                // Focus filter on show
-                setTimeout(() => this._filter.focus(), 100);
-              }
-              
-              private _updateList(): void {
-                const filter = this._filter.value.toLowerCase();
-                const filtered = filter 
-                  ? this._allModels.filter(m => m.toLowerCase().includes(filter))
-                  : this._allModels;
-                
-                this._modelList.innerHTML = '';
-                this._select.innerHTML = '';
-                
-                if (filtered.length === 0) {
-                  const noMatch = document.createElement('div');
-                  noMatch.textContent = 'No matching models';
-                  noMatch.style.cssText = 'padding: 12px; color: var(--jp-ui-font-color2); font-style: italic;';
-                  this._modelList.appendChild(noMatch);
-                  return;
-                }
-                
-                filtered.forEach(model => {
-                  const option = document.createElement('option');
-                  option.value = model;
-                  option.textContent = model;
-                  if (model === this._selectedModel) option.selected = true;
-                  this._select.appendChild(option);
-                  
-                  const item = document.createElement('div');
-                  item.textContent = model;
-                  item.style.cssText = `
-                    padding: 8px 12px; 
-                    cursor: pointer; 
-                    border-bottom: 1px solid var(--jp-border-color2);
-                    background: ${model === this._selectedModel ? 'var(--jp-brand-color3)' : 'transparent'};
-                  `;
-                  item.addEventListener('mouseenter', () => {
-                    if (model !== this._selectedModel) {
-                      item.style.background = 'var(--jp-layout-color2)';
-                    }
-                  });
-                  item.addEventListener('mouseleave', () => {
-                    item.style.background = model === this._selectedModel ? 'var(--jp-brand-color3)' : 'transparent';
-                  });
-                  item.addEventListener('click', () => {
-                    this._selectedModel = model;
-                    this._select.value = model;
-                    const currentSpan = this.node.querySelector('#current-model');
-                    if (currentSpan) currentSpan.textContent = model;
-                    this._updateList();
-                  });
-                  this._modelList.appendChild(item);
-                });
-              }
-              
-              getValue(): string {
-                return this._selectedModel;
-              }
-            }
-            
-            // Helper to check if current notebook uses WebLLM kernel
-            const isWebLLMKernelActive = (): boolean => {
+            const isAISdkKernelActive = (): boolean => {
               try {
                 const current = app.shell?.currentWidget;
                 if (current && (current as any).sessionContext) {
                   const kernelName = (current as any).sessionContext?.session?.kernel?.name;
-                  return kernelName === 'webllm-chat';
+                  return kernelName === 'ai-sdk-chat';
                 }
               } catch (e) {
                 // Ignore errors
@@ -777,39 +628,16 @@ After initialization, use "%chat model <name>" to switch models.`;
             };
             
             app.commands.addCommand(SETTINGS_COMMAND, {
-              label: "Change WebLLM Model...",
-              isVisible: () => isWebLLMKernelActive(),
+              label: "Open AI SDK Settings...",
+              isVisible: () => isAISdkKernelActive(),
               execute: async () => {
-                // Show custom model selection dialog
-                const currentModel = settingsDefaultModel || DEFAULT_WEBLLM_MODEL;
-                const body = new ModelSelectorDialogBody(currentModel);
-                
-                const result = await showDialog({
-                  title: 'Change Model',
-                  body,
-                  buttons: [
-                    Dialog.cancelButton(),
-                    Dialog.okButton({ label: 'Select' })
-                  ]
-                });
-                
-                if (result.button.accept) {
-                  const newModel = body.getValue();
-                  if (newModel && newModel !== currentModel && isValidWebLLMModel(newModel)) {
-                    // Update the settings
-                    if (settingRegistry) {
-                      try {
-                        const settings = await settingRegistry.load("@wiki3-ai/webllm-chat-kernel:plugin");
-                        await settings.set("defaultModel", newModel);
-                        console.log("[webllm-chat-kernel] Model setting saved:", newModel);
-                      } catch (e) {
-                        console.warn("[webllm-chat-kernel] Could not save to settings registry:", e);
-                        // Fall back to just updating the local variable
-                        settingsDefaultModel = newModel;
-                      }
-                    } else {
-                      settingsDefaultModel = newModel;
-                    }
+                if (settingRegistry) {
+                  try {
+                    await app.commands.execute('settingeditor:open', {
+                      query: '@wiki3-ai/ai-sdk-chat-kernel'
+                    });
+                  } catch (e) {
+                    console.warn("[ai-sdk-chat-kernel] Could not open settings editor:", e);
                   }
                 }
               }
@@ -820,43 +648,26 @@ After initialization, use "%chat model <name>" to switch models.`;
               const mainMenuModule = await importShared("@jupyterlab/mainmenu");
               if (mainMenuModule?.IMainMenu) {
                 const IMainMenu = mainMenuModule.IMainMenu;
-                // Try to get mainMenu from app
                 const mainMenu = app.serviceManager?.mainMenu || 
                   (app as any)._plugins?.get?.(IMainMenu.name)?.service;
                 if (mainMenu?.settingsMenu) {
                   mainMenu.settingsMenu.addGroup([{ command: SETTINGS_COMMAND }], 100);
-                  console.log("[webllm-chat-kernel] Added settings command to Settings menu");
+                  console.log("[ai-sdk-chat-kernel] Added settings command to Settings menu");
                 }
               }
             } catch (e) {
-              console.log("[webllm-chat-kernel] Could not add to Settings menu:", e);
-            }
-
-            // Log model download progress to console
-            if (typeof window !== "undefined") {
-              window.addEventListener("webllm:model-progress", (ev: any) => {
-                const { progress: p, text } = ev.detail;
-                const suffix =
-                  typeof p === "number" && p > 0 && p < 1
-                    ? ` ${Math.round(p * 100)}%`
-                    : p === 1
-                    ? " ready"
-                    : "";
-                console.log(`[webllm-chat-kernel] ${text || "Loading"}${suffix}`);
-              });
+              console.log("[ai-sdk-chat-kernel] Could not add to Settings menu:", e);
             }
           },
         };
 
-        const plugins = [webllmChatKernelPlugin];
-        console.log("[webllm-chat-kernel/federation] ===== PLUGIN CREATED SUCCESSFULLY =====");
-        console.log("[webllm-chat-kernel/federation] Plugin ID:", webllmChatKernelPlugin.id);
-        console.log("[webllm-chat-kernel/federation] Plugin autoStart:", webllmChatKernelPlugin.autoStart);
-        console.log("[webllm-chat-kernel/federation] Returning plugins array:", plugins);
+        const plugins = [aiSdkChatKernelPlugin];
+        console.log("[ai-sdk-chat-kernel/federation] ===== PLUGIN CREATED SUCCESSFULLY =====");
+        console.log("[ai-sdk-chat-kernel/federation] Plugin ID:", aiSdkChatKernelPlugin.id);
+        console.log("[ai-sdk-chat-kernel/federation] Plugin autoStart:", aiSdkChatKernelPlugin.autoStart);
+        console.log("[ai-sdk-chat-kernel/federation] Returning plugins array:", plugins);
 
-        // IMPORTANT: Shape the exports like a real federated ES module
-        // so JupyterLite's loader sees our plugins. It checks for
-        // `__esModule` and then reads `.default`.
+        // Shape the exports like a real federated ES module
         const moduleExports = {
           __esModule: true,
           default: plugins
@@ -866,7 +677,7 @@ After initialization, use "%chat model <name>" to switch models.`;
       };
     }
 
-    throw new Error(`[webllm-chat-kernel/federation] Unknown module: ${module}`);
+    throw new Error(`[ai-sdk-chat-kernel/federation] Unknown module: ${module}`);
   }
 };
 
@@ -874,4 +685,4 @@ After initialization, use "%chat model <name>" to switch models.`;
 window._JUPYTERLAB = window._JUPYTERLAB || {};
 window._JUPYTERLAB[scope] = container;
 
-console.log("[webllm-chat-kernel/federation] Registered Module Federation container for scope:", scope);
+console.log("[ai-sdk-chat-kernel/federation] Registered Module Federation container for scope:", scope);

@@ -1,28 +1,35 @@
 {
-  "name": "@wiki3-ai/webllm-chat-kernel",
-  "version": "0.2.5dev2",
-  "description": "WebLLM chat kernel for JupyterLite using @built-in-ai/web-llm",
+  "name": "@wiki3-ai/ai-sdk-chat-kernel",
+  "version": "0.2.6dev7",
+  "description": "AI SDK chat kernel for JupyterLite using Vercel AI SDK",
   "type": "module",
   "main": "dist/index.js",
   "files": [
     "labextension/**/*"
   ],
   "scripts": {
+    "sync-version": "node scripts/sync-version.cjs",
     "build:ts": "tsc --project tsconfig.json",
     "build:bundle": "esbuild ./lib/federation.js --bundle --format=iife --outfile=dist/index.js",
     "build:labextension": "npm run build:ts && npm run build:bundle && npm run build:package",
     "build:package": "node -e \"const pkg = require('./package.json'); const fs = require('fs'); const out = {name: pkg.name, version: pkg.version, jupyterlab: {...pkg.jupyterlab, _build: {load: 'index.js', extension: './extension'}}}; fs.writeFileSync('dist/package.json', JSON.stringify(out, null, 2));\"",
-    "build": "npm run build:labextension",
-    "build:prod": "npm run build:labextension && npm run copy:labextension",
-    "copy:labextension": "mkdir -p labextension && cp -r dist/* labextension/ && cp install.json labextension/ && mkdir -p labextension/schemas/@wiki3-ai/webllm-chat-kernel && cp schema/plugin.json labextension/schemas/@wiki3-ai/webllm-chat-kernel/",
+    "build": "npm run sync-version && npm run build:labextension",
+    "build:prod": "npm run sync-version && npm run build:labextension && npm run copy:labextension",
+    "copy:labextension": "mkdir -p labextension && cp -r dist/* labextension/ && cp install.json labextension/ && mkdir -p labextension/schemas/@wiki3-ai/ai-sdk-chat-kernel && cp schema/plugin.json labextension/schemas/@wiki3-ai/ai-sdk-chat-kernel/",
     "clean": "rm -rf lib dist labextension"
   },
   "dependencies": {
-    "@jupyterlab/application": "^4.5.0",
+    "@ai-sdk/anthropic": "^2.0.53",
+    "@ai-sdk/google": "^2.0.44",
+    "@ai-sdk/openai": "^2.0.77",
+    "@built-in-ai/core": "^2.0.1",
+    "@built-in-ai/web-llm": "^0.3.1",
+    "@jupyterlab/application": "^4.4.10",
     "@jupyterlab/coreutils": "^6.5.0",
     "@jupyterlab/services": "^7.5.0",
-    "@jupyterlite/kernel": "^0.7.0",
-    "@mlc-ai/web-llm": "^0.2.79"
+    "@jupyterlite/kernel": "^0.6.4",
+    "@mlc-ai/web-llm": "^0.2.80",
+    "ai": "^5.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
