@@ -121,118 +121,170 @@ const container = {
 
         /**
          * Chat kernel using Vercel AI SDK
+         * 
+         * State management:
+         * - Each kernel instance has its own isolated state
+         * - Settings (provider, model, apiKey) are stored but session is created lazily
+         * - Magic commands can configure the kernel before the first message
+         * - Session is only created when actually sending a message
          */
         class AIChatKernel {
-          private provider: string | null = null;
-          private modelName: string | null = null;
-          private apiKey: string | null = null;
-          private initialized: boolean = false;
+          // Pending configuration (can be modified by magic commands before session creation)
+          private pendingProvider: string | null = null;
+          private pendingModel: string | null = null;
+          private pendingApiKey: string | null = null;
+          
+          // Active session state
+          private activeProvider: string | null = null;
+          private activeModel: string | null = null;
           private languageModel: any | null = null;
+          private sessionInitialized: boolean = false;
 
           constructor() {
-            console.log("[AIChatKernel] Created (initialization deferred until first execution)");
+            console.log("[AIChatKernel] Created (session creation deferred until first message)");
           }
 
           /**
-           * Get API key from stored key or settings.
-           * Priority: 1) Instance key (set via magic command), 2) Settings key
+           * Get API key - checks pending config first, then settings
            */
-          private getApiKey(providerName: string): string | null {
-            // Check if we have a stored key for the current provider (set via magic command)
-            if (this.apiKey && this.provider === providerName) {
-              return this.apiKey;
+          private getApiKey(): string | null {
+            // Priority: 1) Pending key set via magic, 2) Settings key
+            if (this.pendingApiKey) {
+              return this.pendingApiKey;
             }
-
-            // Check if we have a key stored in this instance (not yet associated with provider)
-            if (this.apiKey) {
-              return this.apiKey;
-            }
-
-            // Fall back to settings API key
-            const settingsKey = getApiKeyFromSettings();
-            if (settingsKey) {
-              return settingsKey;
-            }
-
-            return null;
+            return getApiKeyFromSettings();
           }
 
           /**
-           * Initialize or reinitialize with a provider and model
+           * Get the provider to use - pending config or settings default
            */
-          async initialize(providerName: string, modelName: string, apiKey?: string): Promise<void> {
-            // Store the configuration
-            this.provider = providerName;
-            this.modelName = modelName;
-            if (apiKey) {
-              this.apiKey = apiKey;
-            }
+          private getProviderToUse(): string {
+            return this.pendingProvider ?? getDefaultProviderFromSettings();
+          }
 
-            // Get API key
-            let key = this.getApiKey(providerName);
+          /**
+           * Get the model to use - pending config or settings/provider default
+           */
+          private async getModelToUse(providerName: string): Promise<string> {
+            if (this.pendingModel) {
+              return this.pendingModel;
+            }
+            return await getDefaultModelFromSettings(providerName);
+          }
+
+          /**
+           * Create the AI session with current configuration.
+           * Called lazily when first message is sent.
+           */
+          private async createSession(): Promise<void> {
+            const providerName = this.getProviderToUse();
+            const modelName = await this.getModelToUse(providerName);
+            const apiKey = this.getApiKey();
             const config = getProviderConfig(providerName);
 
             // Check if API key is required but not provided
-            if (!key && config?.requiresApiKey) {
+            if (!apiKey && config?.requiresApiKey) {
               throw new Error(`API key required for ${providerName}.\n\nSet it in: Settings > AI SDK Chat Kernel > API Key\n\nOr use magic commands:\n  %chat provider ${providerName} --key\n  %chat key`);
             }
 
             // Create language model using dynamic provider system
             try {
-              this.languageModel = await createProvider(providerName, modelName, key ?? undefined);
-              this.initialized = true;
-              console.log(`[AIChatKernel] Initialized with provider: ${providerName}, model: ${modelName}`);
+              this.languageModel = await createProvider(providerName, modelName, apiKey ?? undefined);
+              this.activeProvider = providerName;
+              this.activeModel = modelName;
+              this.sessionInitialized = true;
+              console.log(`[AIChatKernel] Session created with provider: ${providerName}, model: ${modelName}`);
             } catch (error: any) {
-              throw new Error(`Failed to initialize provider ${providerName}: ${error.message}`);
+              throw new Error(`Failed to create session with ${providerName}: ${error.message}`);
             }
           }
 
           /**
-           * Set API key for current provider
+           * Check if session needs to be (re)created due to config changes
+           */
+          private needsSessionRefresh(): boolean {
+            if (!this.sessionInitialized) return true;
+            
+            const targetProvider = this.getProviderToUse();
+            const targetModel = this.pendingModel; // Only check if explicitly set
+            
+            if (targetProvider !== this.activeProvider) return true;
+            if (targetModel && targetModel !== this.activeModel) return true;
+            
+            return false;
+          }
+
+          /**
+           * Set API key (stored for use when session is created)
            */
           setApiKey(key: string): void {
-            // Validate API key format (no whitespace)
             if (!key || /\s/.test(key)) {
               throw new Error("Invalid API key format. API keys should not contain whitespace.");
             }
-            this.apiKey = key;
-            console.log(`[AIChatKernel] API key updated`);
+            this.pendingApiKey = key;
+            // Mark session for refresh if it exists
+            if (this.sessionInitialized) {
+              this.sessionInitialized = false;
+              this.languageModel = null;
+            }
+            console.log(`[AIChatKernel] API key configured`);
           }
 
           /**
-           * Set provider (and optionally model and API key)
+           * Set provider (stored for use when session is created)
            */
-          async setProvider(providerName: string, modelName?: string, apiKey?: string): Promise<string> {
+          setProvider(providerName: string, modelName?: string, apiKey?: string): string {
             const config = getProviderConfig(providerName);
+            if (!config) {
+              // Allow unknown providers - they might be custom
+              console.warn(`[AIChatKernel] Unknown provider: ${providerName}, proceeding anyway`);
+            }
             
-            // Use provided model or get default for this provider
-            const model = modelName || await getDefaultModel(providerName);
-
-            await this.initialize(providerName, model, apiKey);
+            this.pendingProvider = providerName;
+            if (modelName) {
+              this.pendingModel = modelName;
+            }
+            if (apiKey) {
+              this.pendingApiKey = apiKey;
+            }
+            
+            // Mark session for refresh on next send
+            this.sessionInitialized = false;
+            this.languageModel = null;
             
             const displayName = config?.displayName || providerName;
-            return `Provider set to: ${displayName} (${model})`;
+            return `Provider: ${displayName}`;
           }
 
           /**
-           * Set model for current provider
+           * Set model (stored for use when session is created)
            */
-          async setModel(modelName: string): Promise<string> {
-            if (!this.provider) {
-              throw new Error("No provider set. Use %chat provider <name> first.");
-            }
-
-            await this.initialize(this.provider, modelName, this.apiKey || undefined);
-            return `Model changed to: ${modelName}`;
+          setModel(modelName: string): string {
+            this.pendingModel = modelName;
+            
+            // Mark session for refresh on next send
+            this.sessionInitialized = false;
+            this.languageModel = null;
+            
+            return `Model: ${modelName}`;
           }
 
           /**
-           * Get current configuration
+           * Get current configuration (both pending and active)
            */
-          getConfig(): { provider: string | null; model: string | null } {
+          getConfig(): { 
+            provider: string | null; 
+            model: string | null;
+            sessionActive: boolean;
+            pendingProvider: string | null;
+            pendingModel: string | null;
+          } {
             return {
-              provider: this.provider,
-              model: this.modelName,
+              provider: this.activeProvider,
+              model: this.activeModel,
+              sessionActive: this.sessionInitialized,
+              pendingProvider: this.pendingProvider,
+              pendingModel: this.pendingModel,
             };
           }
 
@@ -240,12 +292,9 @@ const container = {
            * Send a message and stream the response
            */
           async send(prompt: string, onChunk?: (chunk: string) => void): Promise<string> {
-            // Initialize if not done yet
-            if (!this.initialized) {
-              const defaultProvider = getDefaultProviderFromSettings();
-              const defaultModel = await getDefaultModelFromSettings(defaultProvider);
-              await this.initialize(defaultProvider, defaultModel);
-              console.log(`[AIChatKernel] Auto-initialized with provider: ${defaultProvider}, model: ${defaultModel}`);
+            // Create or refresh session if needed
+            if (this.needsSessionRefresh()) {
+              await this.createSession();
             }
 
             if (!this.languageModel) {
@@ -253,12 +302,10 @@ const container = {
             }
 
             console.log(
-              "[AIChatKernel] Sending prompt:",
-              prompt,
-              "using provider:",
-              this.provider,
+              "[AIChatKernel] Sending prompt to provider:",
+              this.activeProvider,
               "model:",
-              this.modelName
+              this.activeModel
             );
 
             // Use streamText from AI SDK
@@ -316,10 +363,21 @@ const container = {
           }
 
           /**
-           * Handle %chat magic commands.
+           * Process a single %chat magic command line.
+           * Returns the result message, or null if not a magic command.
            */
-          private async handleMagic(code: string): Promise<string | null> {
-            const trimmed = code.trim();
+          private async processSingleMagic(line: string): Promise<string | null> {
+            const trimmed = line.trim();
+            
+            // Skip empty lines
+            if (!trimmed) {
+              return null;
+            }
+            
+            // Only process lines starting with %chat
+            if (!trimmed.startsWith('%chat')) {
+              return null;
+            }
 
             // %chat help
             if (trimmed === "%chat" || trimmed === "%chat help") {
@@ -421,13 +479,32 @@ Note:
 
             // %chat status
             if (trimmed === "%chat status") {
-              const { provider, model } = this.chat.getConfig();
-              if (!provider) {
+              const config = this.chat.getConfig();
+              let status = "";
+              
+              if (config.sessionActive) {
+                status = `Active session:\n  Provider: ${config.provider}\n  Model: ${config.model}`;
+              } else {
+                status = "No active session yet.";
+              }
+              
+              if (config.pendingProvider || config.pendingModel) {
+                status += "\n\nPending configuration:";
+                if (config.pendingProvider) {
+                  status += `\n  Provider: ${config.pendingProvider}`;
+                }
+                if (config.pendingModel) {
+                  status += `\n  Model: ${config.pendingModel}`;
+                }
+              }
+              
+              if (!config.sessionActive && !config.pendingProvider) {
                 const defProvider = getDefaultProviderFromSettings();
                 const defModel = await getDefaultModelFromSettings(defProvider);
-                return `Not yet initialized. Will use default: ${defProvider} with model ${defModel}`;
+                status += `\n\nDefaults from settings:\n  Provider: ${defProvider}\n  Model: ${defModel}`;
               }
-              return `Current provider: ${provider}\nCurrent model: ${model}`;
+              
+              return status;
             }
 
             // %chat key [api-key] - if no key provided, prompt securely
@@ -438,11 +515,11 @@ Note:
                 // Prompt for key using password field (hidden input)
                 key = await this.promptForPassword('Enter API key: ');
                 if (!key || key.trim() === '') {
-                  return "API key entry cancelled (empty input).";
+                  return "API key entry cancelled.";
                 }
               }
               this.chat.setApiKey(key);
-              return "API key set successfully.";
+              return "API key set.";
             }
 
             // %chat provider <name> [--key [api-key]]
@@ -462,7 +539,7 @@ Note:
               }
               
               try {
-                const result = await this.chat.setProvider(providerName, undefined, apiKey);
+                const result = this.chat.setProvider(providerName, undefined, apiKey);
                 return result;
               } catch (err: any) {
                 throw new Error(`${err.message}\n\nUse "%chat list" to see available providers.`);
@@ -474,46 +551,64 @@ Note:
             if (modelMatch) {
               const modelName = modelMatch[1].trim();
               try {
-                const result = await this.chat.setModel(modelName);
+                const result = this.chat.setModel(modelName);
                 return result;
               } catch (err: any) {
                 throw new Error(`${err.message}\n\nUse "%chat list" to see available models.`);
               }
             }
 
-            return null; // Not a magic command
+            // Unrecognized %chat command
+            return `Unknown command: ${trimmed}\nUse "%chat help" for available commands.`;
           }
 
           async executeRequest(content: any): Promise<any> {
             const code = String(content.code ?? "");
             try {
-              // Check for magic commands first
-              const magicResult = await this.handleMagic(code);
-              if (magicResult !== null) {
-                // @ts-ignore
-                this.stream(
-                  { name: "stdout", text: magicResult + "\n" },
-                  // @ts-ignore
-                  this.parentHeader
-                );
-                return {
-                  status: "ok",
-                  // @ts-ignore
-                  execution_count: this.executionCount,
-                  payload: [],
-                  user_expressions: {},
-                };
+              // Split code into lines and process magic commands
+              const lines = code.split('\n');
+              const magicResults: string[] = [];
+              const nonMagicLines: string[] = [];
+              
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('%chat')) {
+                  // Process magic command
+                  const result = await this.processSingleMagic(line);
+                  if (result !== null) {
+                    magicResults.push(result);
+                  }
+                } else if (trimmed) {
+                  // Non-empty, non-magic line
+                  nonMagicLines.push(line);
+                }
               }
-
-              // Stream each chunk as it arrives
-              await this.chat.send(code, (chunk: string) => {
+              
+              // Output magic command results
+              if (magicResults.length > 0) {
                 // @ts-ignore
                 this.stream(
-                  { name: "stdout", text: chunk },
+                  { name: "stdout", text: magicResults.join('\n') + "\n" },
                   // @ts-ignore
                   this.parentHeader
                 );
-              });
+              }
+              
+              // If there's non-magic content, send it as a prompt
+              const prompt = nonMagicLines.join('\n').trim();
+              if (prompt) {
+                // Stream each chunk as it arrives
+                await this.chat.send(prompt, (chunk: string) => {
+                  // @ts-ignore
+                  this.stream(
+                    { name: "stdout", text: chunk },
+                    // @ts-ignore
+                    this.parentHeader
+                  );
+                });
+              } else if (magicResults.length === 0) {
+                // Empty cell - do nothing
+              }
 
               return {
                 status: "ok",
