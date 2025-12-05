@@ -29,6 +29,13 @@
       "title": "Default Model",
       "description": "The model to use when the kernel is first initialized. For built-in-ai: use 'prompt-api' for Chrome AI or WebLLM model names. Use %chat list <provider> to see available models.",
       "default": "prompt-api"
+    },
+    "apiKey": {
+      "type": "string",
+      "title": "API Key",
+      "description": "API key for the selected provider (e.g., OpenAI, Anthropic, Google). Not needed for 'built-in-ai' provider. The key is stored in browser local storage.",
+      "default": "",
+      "format": "password"
     }
   },
   "additionalProperties": false

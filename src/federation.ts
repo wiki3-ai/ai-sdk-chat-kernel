@@ -15,12 +15,20 @@ let sharedScope: any = null;
 // Module-level storage for settings
 let settingsDefaultProvider: string | null = null;
 let settingsDefaultModel: string | null = null;
+let settingsApiKey: string | null = null;
 
 /**
  * Get the default provider from settings, falling back to the hardcoded default.
  */
 function getDefaultProviderFromSettings(): string {
   return settingsDefaultProvider ?? DEFAULT_PROVIDER;
+}
+
+/**
+ * Get the API key from settings
+ */
+function getApiKeyFromSettings(): string | null {
+  return settingsApiKey;
 }
 
 /**
@@ -126,20 +134,26 @@ const container = {
           }
 
           /**
-           * Get API key from stored key only (browser environment doesn't have access to env vars)
-           * Environment variables would need to be injected at build time, which is not recommended
-           * for security reasons in browser contexts.
+           * Get API key from stored key or settings.
+           * Priority: 1) Instance key (set via magic command), 2) Settings key
            */
           private getApiKey(providerName: string): string | null {
-            // Check if we have a stored key for the current provider
+            // Check if we have a stored key for the current provider (set via magic command)
             if (this.apiKey && this.provider === providerName) {
               return this.apiKey;
             }
 
-            // In browser environments, we don't have access to process.env at runtime
-            // Users must provide API keys via magic commands:
-            // - %chat provider <name> --key <api-key>
-            // - %chat key <api-key>
+            // Check if we have a key stored in this instance (not yet associated with provider)
+            if (this.apiKey) {
+              return this.apiKey;
+            }
+
+            // Fall back to settings API key
+            const settingsKey = getApiKeyFromSettings();
+            if (settingsKey) {
+              return settingsKey;
+            }
+
             return null;
           }
 
@@ -160,7 +174,7 @@ const container = {
 
             // Check if API key is required but not provided
             if (!key && config?.requiresApiKey) {
-              throw new Error(`API key required for ${providerName}. Provide it using:\n  %chat provider ${providerName} --key <your-api-key>\nOr set it separately:\n  %chat key <your-api-key>`);
+              throw new Error(`API key required for ${providerName}.\n\nSet it in: Settings > AI SDK Chat Kernel > API Key\n\nOr use magic commands:\n  %chat provider ${providerName} --key\n  %chat key`);
             }
 
             // Create language model using dynamic provider system
@@ -332,8 +346,9 @@ Examples:
 
 Note: 
 - The 'built-in-ai' provider uses Chrome Built-in AI if available, or WebLLM as fallback.
-- Use '%chat key' or '--key' without a value to enter keys securely (hidden input).
-- Avoid putting API keys directly in notebook cells as they will be saved in the file.`;
+- API keys can be set in Settings > AI SDK Chat Kernel (recommended).
+- Use '%chat key' or '--key' to enter keys via dialog (not saved in notebook).
+- Avoid putting API keys directly in notebook cells.`;
             }
 
             // %chat list [provider]
@@ -611,6 +626,7 @@ Note:
                 const updateSettings = () => {
                   const provider = settings.get("defaultProvider").composite as string;
                   const model = settings.get("defaultModel").composite as string;
+                  const apiKey = settings.get("apiKey").composite as string;
                   
                   if (provider) {
                     settingsDefaultProvider = provider;
@@ -620,6 +636,14 @@ Note:
                   if (model) {
                     settingsDefaultModel = model;
                     console.log("[ai-sdk-chat-kernel] Default model from settings:", model);
+                  }
+                  
+                  if (apiKey) {
+                    settingsApiKey = apiKey;
+                    // Don't log the actual key for security
+                    console.log("[ai-sdk-chat-kernel] API key loaded from settings");
+                  } else {
+                    settingsApiKey = null;
                   }
                 };
                 updateSettings();
