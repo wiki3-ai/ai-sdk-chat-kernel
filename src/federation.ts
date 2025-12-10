@@ -272,8 +272,12 @@ const container = {
             }
             
             this.pendingProvider = providerName;
+            // Clear pendingModel when switching providers so the new provider's default is used
+            // Unless a specific model was provided
             if (modelName) {
               this.pendingModel = modelName;
+            } else {
+              this.pendingModel = null;
             }
             if (apiKey) {
               this.pendingApiKey = apiKey;
@@ -367,14 +371,11 @@ const container = {
             super(options);
             this.chat = new AIChatKernel();
             
-            // Set up progress callback to stream to notebook output
+            // Set up progress callback to log to console (keeps notebook output clean)
             this.chat.setProgressCallback((text: string) => {
-              // @ts-ignore - stream method exists on BaseKernel
-              this.stream(
-                { name: "stdout", text: text },
-                // @ts-ignore
-                this.parentHeader
-              );
+              // Log to console instead of notebook output
+              // Progress messages are for model downloads which can be verbose
+              console.info(`[ai-sdk-chat-kernel] ${text.trim()}`);
             });
           }
 
