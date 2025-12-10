@@ -3,7 +3,17 @@
 
 import { streamText, type LanguageModel } from 'ai';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, type ProviderConfig } from "./models.js";
-import { createProvider, getProviderModels, getDefaultModel } from "./providers.js";
+import { 
+  createProvider, 
+  getProviderModels, 
+  getDefaultModel, 
+  autoSelectLocalProvider,
+  checkProviderSupport,
+  formatModelInfo,
+  getAllProviderNames,
+  type ModelInfo,
+  type ProgressReport
+} from "./providers.js";
 
 declare const window: any;
 
@@ -12,7 +22,7 @@ console.log("[ai-sdk-chat-kernel/federation] Setting up Module Federation contai
 const scope = "@wiki3-ai/ai-sdk-chat-kernel";
 let sharedScope: any = null;
 
-// Module-level storage for settings
+// Module-level storage for settings (captured from frontend when model loads)
 let settingsDefaultProvider: string | null = null;
 let settingsDefaultModel: string | null = null;
 let settingsApiKey: string | null = null;
@@ -139,9 +149,19 @@ const container = {
           private activeModel: string | null = null;
           private languageModel: any | null = null;
           private sessionInitialized: boolean = false;
+          
+          // Progress output callback (set by parent kernel)
+          private onProgress: ((text: string) => void) | null = null;
 
           constructor() {
-            console.log("[AIChatKernel] Created (session creation deferred until first message)");
+            console.debug("[AIChatKernel] Created (session creation deferred until first message)");
+          }
+          
+          /**
+           * Set progress callback for outputting download progress
+           */
+          setProgressCallback(callback: (text: string) => void): void {
+            this.onProgress = callback;
           }
 
           /**
@@ -187,15 +207,26 @@ const container = {
               throw new Error(`API key required for ${providerName}.\n\nSet it in: Settings > AI SDK Chat Kernel > API Key\n\nOr use magic commands:\n  %chat provider ${providerName} --key\n  %chat key`);
             }
 
-            // Create language model using dynamic provider system
+            // Create language model using dynamic provider system with progress reporting
             try {
-              this.languageModel = await createProvider(providerName, modelName, apiKey ?? undefined);
+              console.info(`[AIChatKernel] Creating session: ${providerName}/${modelName}`);
+              
+              // Progress callback for model download
+              const progressCallback = (report: ProgressReport) => {
+                console.debug(`[AIChatKernel] Progress: ${report.text}`);
+                if (this.onProgress) {
+                  this.onProgress(report.text + '\n');
+                }
+              };
+              
+              this.languageModel = await createProvider(providerName, modelName, apiKey ?? undefined, progressCallback);
               this.activeProvider = providerName;
               this.activeModel = modelName;
               this.sessionInitialized = true;
-              console.log(`[AIChatKernel] Session created with provider: ${providerName}, model: ${modelName}`);
+              console.info(`[AIChatKernel] Session created: ${providerName}/${modelName}`);
             } catch (error: any) {
-              throw new Error(`Failed to create session with ${providerName}: ${error.message}`);
+              console.error(`[AIChatKernel] Session creation failed:`, error);
+              throw new Error(`Failed to create session with ${providerName}/${modelName}: ${error.message}`);
             }
           }
 
@@ -322,7 +353,7 @@ const container = {
               }
             }
 
-            console.log("[AIChatKernel] Got reply:", fullText);
+            console.debug("[AIChatKernel] Got reply:", fullText.substring(0, 100) + (fullText.length > 100 ? '...' : ''));
             return fullText;
           }
         }
@@ -330,10 +361,21 @@ const container = {
         // Define AISdkLiteKernel extending BaseKernel
         class AISdkLiteKernel extends BaseKernel {
           private chat: AIChatKernel;
+          private abortController: AbortController | null = null;
 
           constructor(options: any) {
             super(options);
             this.chat = new AIChatKernel();
+            
+            // Set up progress callback to stream to notebook output
+            this.chat.setProgressCallback((text: string) => {
+              // @ts-ignore - stream method exists on BaseKernel
+              this.stream(
+                { name: "stdout", text: text },
+                // @ts-ignore
+                this.parentHeader
+              );
+            });
           }
 
           /**
@@ -381,8 +423,8 @@ const container = {
 
             // %chat help
             if (trimmed === "%chat" || trimmed === "%chat help") {
-              const providers = getAllProviders();
-              const providerList = providers.map(p => p.name).join(', ');
+              const providerNames = getAllProviderNames();
+              const providerList = providerNames.join(', ');
               
               return `AI SDK Chat Kernel Magic Commands:
 
@@ -392,86 +434,127 @@ const container = {
   %chat model <name>              - Set model (provider-specific)
   %chat key                       - Prompt securely for API key (recommended)
   %chat key <api-key>             - Set API key (visible in cell - not recommended)
-  %chat list                      - List available providers
+  %chat list                      - List available providers with support status
+  %chat list <provider>           - List models for a provider
+  %chat list <provider> --filter <pattern>  - Filter models by name pattern
+  %chat list <provider> --low-resource      - Show only low-resource models
   %chat status                    - Show current configuration
   %chat help                      - Show this help message
 
 Examples:
-  %chat provider built-in-ai
+  %chat provider built-in-ai/core
+  %chat provider built-in-ai/webllm
+  %chat list built-in-ai/webllm --filter llama
+  %chat list built-in-ai/webllm --low-resource
   %chat provider openai --key     (prompts securely for key)
-  %chat key                       (prompts securely for key)
-  %chat model gpt-4o
+  %chat model gpt-4o-mini
 
 Note: 
-- The 'built-in-ai' provider uses Chrome Built-in AI if available, or WebLLM as fallback.
-- API keys can be set in Settings > AI SDK Chat Kernel (recommended).
-- Use '%chat key' or '--key' to enter keys via dialog (not saved in notebook).
-- Avoid putting API keys directly in notebook cells.`;
+- 'built-in-ai/core' uses Chrome/Edge Built-in AI (Gemini Nano/Phi-4 Mini)
+- 'built-in-ai/webllm' uses WebLLM for local inference via WebGPU
+- API keys can be set in Settings > AI SDK Chat Kernel
+- Use '%chat key' or '--key' to enter keys via secure dialog`;
             }
 
-            // %chat list [provider]
-            const listMatch = trimmed.match(/^%chat\s+list(?:\s+(\S+))?$/);
+            // %chat list [provider] [--filter <pattern>] [--low-resource]
+            const listMatch = trimmed.match(/^%chat\s+list(?:\s+(\S+))?(?:\s+--filter\s+(\S+))?(\s+--low-resource)?$/);
             if (listMatch || trimmed === "%chat list") {
               const specificProvider = listMatch?.[1];
+              const filterPattern = listMatch?.[2];
+              const lowResourceOnly = !!listMatch?.[3];
               
               if (specificProvider) {
+                // Check provider support first
+                const support = await checkProviderSupport(specificProvider);
+                
                 // List models for a specific provider
-                const models = await getProviderModels(specificProvider);
+                const models = await getProviderModels(specificProvider, {
+                  namePattern: filterPattern,
+                  lowResourceOnly: lowResourceOnly
+                });
                 const config = getProviderConfig(specificProvider);
                 
                 if (!config) {
                   return `Unknown provider: ${specificProvider}\n\nUse "%chat list" to see available providers.`;
                 }
                 
-                let output = `${config.displayName} (${config.name}) Models:\n\n`;
+                let output = `${config.displayName} (${config.name})\n`;
+                output += `Support: ${support.supported ? '✓ Available' : `✗ ${support.reason}`}\n\n`;
                 
                 if (models.length > 0) {
                   const defaultModel = await getDefaultModel(specificProvider);
-                  models.forEach((model: string) => {
-                    const isDefault = model === defaultModel;
-                    output += `  ${isDefault ? '• ' : '  '}${model}${isDefault ? ' (default)' : ''}\n`;
-                  });
+                  output += `Models${filterPattern ? ` (filtered: "${filterPattern}")` : ''}${lowResourceOnly ? ' (low-resource only)' : ''}:\n\n`;
                   
-                  // Add helpful note for built-in-ai provider
-                  if (specificProvider === 'built-in-ai') {
-                    output += '\nNote: "prompt-api" uses Chrome Built-in AI, others use WebLLM for local inference.\n';
+                  for (const model of models) {
+                    const isDefault = model.id === defaultModel;
+                    let line = `  ${isDefault ? '• ' : '  '}${model.id}`;
+                    
+                    // Add metadata
+                    const meta: string[] = [];
+                    if (model.vramMB) meta.push(`${Math.round(model.vramMB)}MB`);
+                    if (model.lowResource) meta.push('low-resource');
+                    if (isDefault) meta.push('default');
+                    
+                    if (meta.length > 0) {
+                      line += ` (${meta.join(', ')})`;
+                    }
+                    output += line + '\n';
+                  }
+                  
+                  // Add helpful notes
+                  if (specificProvider === 'built-in-ai/webllm') {
+                    output += '\nTip: Use --low-resource to show models for mobile/low-end devices\n';
+                    output += 'Tip: Use --filter <name> to search (e.g., --filter llama)\n';
                   }
                 } else {
-                  output += "  Accepts any model name\n";
+                  if (filterPattern || lowResourceOnly) {
+                    output += "No models match the filter criteria.\n";
+                  } else {
+                    output += "Accepts any model name\n";
+                  }
                 }
                 
                 if (config.requiresApiKey) {
                   output += `\nRequires API key: ${config.envVar || 'Set via %chat key'}\n`;
                 }
                 
-                output += `\nUsage:\n  %chat provider ${specificProvider}${config.requiresApiKey ? ' --key <api-key>' : ''}\n`;
+                output += `\nUsage:\n  %chat provider ${specificProvider}${config.requiresApiKey ? ' --key' : ''}\n`;
                 output += `  %chat model <model-name>\n`;
                 
                 return output;
               } else {
-                // List all providers
+                // List all providers with support status
                 const providers = getAllProviders();
                 let output = "Available Providers:\n\n";
                 
                 for (const config of providers) {
+                  const support = await checkProviderSupport(config.name);
                   const defaultModel = await getDefaultModel(config.name);
-                  output += `• ${config.displayName} (${config.name})\n`;
-                  output += `  Default model: ${defaultModel}\n`;
                   
-                  if (config.isBuiltIn) {
-                    output += `  Type: Browser built-in (prompt-api) or local (WebLLM)\n`;
-                  } else if (config.requiresApiKey) {
-                    output += `  Requires API key${config.envVar ? `: ${config.envVar}` : ''}\n`;
+                  const statusIcon = support.supported ? '✓' : '✗';
+                  output += `${statusIcon} ${config.displayName} (${config.name})\n`;
+                  
+                  if (config.description) {
+                    output += `  ${config.description}\n`;
+                  }
+                  
+                  if (!support.supported) {
+                    output += `  Status: ${support.reason}\n`;
+                  } else {
+                    output += `  Default model: ${defaultModel}\n`;
+                  }
+                  
+                  if (config.requiresApiKey) {
+                    output += `  Requires API key: ${config.envVar || 'yes'}\n`;
                   }
                   output += "\n";
                 }
                 
                 output += "Use '%chat list <provider>' to see models for a specific provider.\n";
                 output += "\nExamples:\n";
-                output += "  %chat list built-in-ai\n";
-                output += "  %chat provider built-in-ai\n";
-                output += "  %chat model prompt-api\n";
-                output += "  %chat provider openai --key sk-...\n";
+                output += "  %chat list built-in-ai/webllm\n";
+                output += "  %chat list built-in-ai/webllm --low-resource\n";
+                output += "  %chat provider openai --key\n";
                 
                 return output;
               }
@@ -618,13 +701,28 @@ Note:
                 user_expressions: {},
               };
             } catch (err: any) {
+              // Handle different error types gracefully
+              const isAbortError = err?.name === 'AbortError' || err?.message?.includes('aborted');
+              
+              if (isAbortError) {
+                // User interrupted - don't show as error
+                console.info('[AISdkLiteKernel] Execution aborted by user');
+                return {
+                  status: "abort",
+                  // @ts-ignore
+                  execution_count: this.executionCount,
+                };
+              }
+              
               const message = err?.message ?? String(err);
+              console.error('[AISdkLiteKernel] Execution error:', message);
+              
               // @ts-ignore
               this.publishExecuteError(
                 {
-                  ename: "Error",
+                  ename: err?.name || "Error",
                   evalue: message,
-                  traceback: [],
+                  traceback: err?.stack ? [err.stack] : [],
                 },
                 // @ts-ignore
                 this.parentHeader
@@ -633,9 +731,9 @@ Note:
                 status: "error",
                 // @ts-ignore
                 execution_count: this.executionCount,
-                ename: "Error",
+                ename: err?.name || "Error",
                 evalue: message,
-                traceback: [],
+                traceback: err?.stack ? [err.stack] : [],
               };
             }
           }
@@ -684,7 +782,22 @@ Note:
           }
 
           async shutdownRequest(_content: any): Promise<any> {
+            console.info('[AISdkLiteKernel] Shutting down');
+            // Abort any in-progress operations
+            if (this.abortController) {
+              this.abortController.abort();
+              this.abortController = null;
+            }
             return { status: "ok", restart: false };
+          }
+          
+          async interruptRequest(): Promise<void> {
+            console.info('[AISdkLiteKernel] Interrupt requested');
+            // Abort any in-progress operations
+            if (this.abortController) {
+              this.abortController.abort();
+              this.abortController = null;
+            }
           }
 
           async commOpen(_content: any): Promise<void> { }

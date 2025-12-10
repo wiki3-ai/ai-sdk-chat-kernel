@@ -21,19 +21,19 @@
     "defaultProvider": {
       "type": "string",
       "title": "Default Provider",
-      "description": "The AI provider to use. 'built-in-ai' uses Chrome Built-in AI with WebLLM fallback. Other options include openai, anthropic, google, or any custom provider name.",
-      "default": "built-in-ai"
+      "description": "The AI provider to use. Options: 'built-in-ai/core' (Chrome/Edge Prompt API), 'built-in-ai/webllm' (WebLLM local inference), 'openai', 'anthropic', 'google'. The kernel will auto-fallback from core to webllm if not available.",
+      "default": "built-in-ai/core"
     },
     "defaultModel": {
       "type": "string",
       "title": "Default Model",
-      "description": "The model to use when the kernel is first initialized. For built-in-ai: use 'prompt-api' for Chrome AI or WebLLM model names. Use %chat list <provider> to see available models.",
-      "default": "prompt-api"
+      "description": "The model to use. For built-in-ai/core: 'text'. For built-in-ai/webllm: any model from %chat list. For cloud providers: see provider docs. Use %chat list <provider> to see available models.",
+      "default": "text"
     },
     "apiKey": {
       "type": "string",
       "title": "API Key",
-      "description": "API key for the selected provider (e.g., OpenAI, Anthropic, Google). Not needed for 'built-in-ai' provider. The key is stored in browser local storage.",
+      "description": "API key for cloud providers (OpenAI, Anthropic, Google). Not needed for built-in-ai providers. The key is stored in browser local storage.",
       "default": "",
       "format": "password"
     }

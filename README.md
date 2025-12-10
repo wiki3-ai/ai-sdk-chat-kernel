@@ -1,6 +1,6 @@
 # @wiki3-ai/ai-sdk-chat-kernel
 
-AI SDK chat kernel for JupyterLite using Vercel AI SDK. This kernel supports multiple LLM providers including OpenAI, Anthropic, Google, and more.
+AI SDK chat kernel for JupyterLite using Vercel AI SDK. This kernel supports multiple LLM providers including local browser-based AI and cloud providers like OpenAI, Anthropic, and Google.
 
 ## Installation
 
@@ -16,33 +16,63 @@ pip install -e .
 
 ## Features
 
-- **Built-in AI Support**: Automatic detection and use of Chrome/Edge Built-in AI with WebLLM fallback
+- **Separated Local AI Providers**: 
+  - `built-in-ai/core` - Chrome/Edge Prompt API (Gemini Nano, Phi-4 Mini)
+  - `built-in-ai/webllm` - WebLLM local inference with open-source models
+- **Auto-Fallback**: Automatically uses `built-in-ai/core` if available, falls back to `built-in-ai/webllm`
+- **Dynamic Model Listing**: Fetches available WebLLM models dynamically from `prebuiltAppConfig`
+- **Model Filtering**: Filter by name pattern, low-resource, or VRAM requirements
+- **Download Progress**: Shows model download progress during WebLLM model loading
 - **Multi-Provider Support**: Works with OpenAI, Anthropic, Google, and other Vercel AI SDK providers
-- **Flexible Configuration**: Dynamic provider and model selection without hardcoded lists
-- **Flexible API Key Management**: 
-  - Magic command arguments (recommended for browser environments)
-  - Environment variables (for server/local deployments)
-- **Model Selection**: Easy switching between any provider-specific models via magic commands
+- **Flexible API Key Management**: Magic command arguments or JupyterLite settings
 
 ## Usage
 
-### Built-in AI (Default)
+### Local AI Providers (Default)
 
-By default, the kernel uses the `built-in-ai` provider with model `prompt-api`:
-- **prompt-api**: Uses Chrome/Edge Built-in AI (requires enabling in chrome://flags)
-- **WebLLM models**: Local inference with models like `SmolLM2-360M-Instruct-q4f16_1-MLC`
+By default, the kernel auto-selects a local AI provider:
 
-No API key needed! Use `%chat list built-in-ai` to see available models.
+1. **built-in-ai/core** (preferred): Chrome/Edge built-in AI using Gemini Nano or Phi-4 Mini
+   - Requires enabling in `chrome://flags` or `edge://flags`
+   - Model: `text` (only option)
+
+2. **built-in-ai/webllm** (fallback): Local inference via WebGPU
+   - Works in any WebGPU-enabled browser
+   - Many models available (Llama, Qwen, Phi, SmolLM, etc.)
+
+No API key needed!
 
 ```python
-# Using Chrome Built-in AI (if enabled)
-%chat provider built-in-ai
-%chat model prompt-api
+# Using Chrome/Edge Built-in AI (if enabled)
+%chat provider built-in-ai/core
+%chat model text
 Hello! How are you?
 
-# Or use WebLLM for local inference
+# Or use WebLLM for local inference with open-source models
+%chat provider built-in-ai/webllm
 %chat model SmolLM2-360M-Instruct-q4f16_1-MLC
 ```
+
+### Listing and Filtering Models
+
+```python
+# List all available providers
+%chat list
+
+# List WebLLM models
+%chat list built-in-ai/webllm
+
+# Filter models by name pattern
+%chat list built-in-ai/webllm --filter llama
+
+# Show only low-resource models (good for limited VRAM)
+%chat list built-in-ai/webllm --low-resource
+
+# Combine filters
+%chat list built-in-ai/webllm --filter qwen --low-resource
+```
+
+Model listings show VRAM requirements (e.g., `[1500 MB]`) to help you choose.
 
 ### Using Cloud Providers
 
@@ -78,20 +108,26 @@ Or still use magic commands as shown above.
 
 ### Magic Commands
 
-- `%chat provider <name>` - Set the provider (built-in-ai, openai, anthropic, google, etc.)
+- `%chat provider <name>` - Set the provider (built-in-ai/core, built-in-ai/webllm, openai, etc.)
 - `%chat model <name>` - Set the model (provider-specific)
 - `%chat key <api-key>` - Set API key for current provider
 - `%chat list` - List available providers
 - `%chat list <provider>` - List available models for a specific provider
+- `%chat list <provider> --filter <pattern>` - Filter models by name pattern
+- `%chat list <provider> --low-resource` - Show only low-resource models
 - `%chat status` - Show current configuration
 - `%chat help` - Show help message
 
 ### Supported Providers
 
-- **built-in-ai**: Browser-based AI (default, no API key needed)
-  - **prompt-api**: Chrome/Edge Built-in AI (default if available)
-  - **WebLLM models**: Local inference (SmolLM2, Llama-3.2, Phi-3.5, Qwen2.5, etc.)
-  - Use `%chat list built-in-ai` to see all available models
+- **built-in-ai/core**: Chrome/Edge Prompt API (default, no API key needed)
+  - Model: `text` (Gemini Nano or Phi-4 Mini depending on browser)
+  - Requires flag enabled in browser settings
+  
+- **built-in-ai/webllm**: WebLLM local inference (fallback, no API key needed)
+  - Many models: Llama-3.2, Qwen2.5, Phi-3.5, SmolLM2, etc.
+  - Use `%chat list built-in-ai/webllm` to see all available models
+  - Requires WebGPU-enabled browser
   
 - **openai**: OpenAI models (requires API key)
   - Default: `gpt-4o-mini` (economical, fast)
