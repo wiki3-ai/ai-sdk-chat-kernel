@@ -23,6 +23,7 @@
     "@ai-sdk/google": "^2.0.44",
     "@ai-sdk/openai": "^2.0.77",
     "@built-in-ai/core": "^2.0.1",
+    "@built-in-ai/transformers-js": "^0.3.4",
     "@built-in-ai/web-llm": "^0.3.1",
     "@jupyterlab/application": "^4.4.10",
     "@jupyterlab/coreutils": "^6.5.0",

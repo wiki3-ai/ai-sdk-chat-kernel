@@ -45,8 +45,10 @@ function getApiKeyFromSettings(): string | null {
  * Get the default model from settings, or provider-specific default
  */
 async function getDefaultModelFromSettings(providerName: string): Promise<string> {
-  // If settings specify a model, use it
-  if (settingsDefaultModel) {
+  // Only use settings model if we're using the settings provider
+  // This ensures that when users switch providers, they get the correct default model
+  const settingsProvider = getDefaultProviderFromSettings();
+  if (settingsDefaultModel && providerName === settingsProvider) {
     return settingsDefaultModel;
   }
   // Otherwise use provider-specific default from providers.ts
@@ -187,9 +189,19 @@ const container = {
            */
           private async getModelToUse(providerName: string): Promise<string> {
             if (this.pendingModel) {
+              console.debug(`[AIChatKernel] Using explicit model: ${this.pendingModel}`);
               return this.pendingModel;
             }
-            return await getDefaultModelFromSettings(providerName);
+            // If user explicitly switched providers, use provider-specific default
+            if (this.pendingProvider) {
+              const defaultModel = await getDefaultModel(providerName);
+              console.debug(`[AIChatKernel] Provider switched, using provider default: ${defaultModel}`);
+              return defaultModel;
+            }
+            // Otherwise use settings default or provider default
+            const model = await getDefaultModelFromSettings(providerName);
+            console.debug(`[AIChatKernel] Using settings/provider default: ${model}`);
+            return model;
           }
 
           /**
@@ -213,7 +225,7 @@ const container = {
               
               // Progress callback for model download
               const progressCallback = (report: ProgressReport) => {
-                console.debug(`[AIChatKernel] Progress: ${report.text}`);
+                // Don't log here - let the onProgress callback handle it to avoid duplication
                 if (this.onProgress) {
                   this.onProgress(report.text + '\n');
                 }
@@ -366,6 +378,7 @@ const container = {
         class AISdkLiteKernel extends BaseKernel {
           private chat: AIChatKernel;
           private abortController: AbortController | null = null;
+          private lastProgressMessage: string = '';
 
           constructor(options: any) {
             super(options);
@@ -375,7 +388,17 @@ const container = {
             this.chat.setProgressCallback((text: string) => {
               // Log to console instead of notebook output
               // Progress messages are for model downloads which can be verbose
-              console.info(`[ai-sdk-chat-kernel] ${text.trim()}`);
+              const trimmed = text.trim();
+              
+              // Deduplicate download progress messages to avoid hundreds of identical logs
+              if (trimmed.toLowerCase().includes('download')) {
+                if (trimmed === this.lastProgressMessage) {
+                  return; // Skip duplicate
+                }
+                this.lastProgressMessage = trimmed;
+              }
+              
+              console.info(`[ai-sdk-chat-kernel] ${trimmed}`);
             });
           }
 
@@ -576,6 +599,11 @@ Note:
                 status += "\n\nPending configuration:";
                 if (config.pendingProvider) {
                   status += `\n  Provider: ${config.pendingProvider}`;
+                  // Show what model will be used
+                  if (!config.pendingModel) {
+                    const defaultModel = await getDefaultModel(config.pendingProvider);
+                    status += `\n  Model: ${defaultModel} (provider default)`;
+                  }
                 }
                 if (config.pendingModel) {
                   status += `\n  Model: ${config.pendingModel}`;

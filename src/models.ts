@@ -29,6 +29,13 @@ export const SUGGESTED_PROVIDERS: Record<string, ProviderConfig> = {
     isBuiltIn: true,
     description: 'Chrome/Edge built-in AI using Gemini Nano or Phi-4 Mini',
   },
+  'built-in-ai/transformers': {
+    name: 'built-in-ai/transformers',
+    displayName: 'Transformers.js (Local)',
+    requiresApiKey: false,
+    isBuiltIn: true,
+    description: 'Local inference with HuggingFace Transformers.js models',
+  },
   'built-in-ai/webllm': {
     name: 'built-in-ai/webllm',
     displayName: 'WebLLM (Local)',
