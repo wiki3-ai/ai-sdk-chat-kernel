@@ -21,13 +21,13 @@
     "defaultProvider": {
       "type": "string",
       "title": "Default Provider",
-      "description": "The AI provider to use. Options: 'built-in-ai/core' (Chrome/Edge Prompt API), 'built-in-ai/webllm' (WebLLM local inference), 'openai', 'anthropic', 'google'. The kernel will auto-fallback from core to webllm if not available.",
+      "description": "The AI provider to use. Options: 'built-in-ai/core' (Chrome/Edge Prompt API), 'built-in-ai/transformers' (Transformers.js local inference), 'built-in-ai/webllm' (WebLLM local inference), 'openai', 'anthropic', 'google'. The kernel will auto-fallback from core to transformers to webllm if not available.",
       "default": "built-in-ai/core"
     },
     "defaultModel": {
       "type": "string",
       "title": "Default Model",
-      "description": "The model to use. For built-in-ai/core: 'text'. For built-in-ai/webllm: any model from %chat list. For cloud providers: see provider docs. Use %chat list <provider> to see available models.",
+      "description": "The model to use. For built-in-ai/core: 'text'. For built-in-ai/transformers: HuggingFace model IDs. For built-in-ai/webllm: any model from %chat list. For cloud providers: see provider docs. Use %chat list <provider> to see available models.",
       "default": "text"
     },
     "apiKey": {

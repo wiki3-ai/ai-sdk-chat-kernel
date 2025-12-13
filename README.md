@@ -18,8 +18,9 @@ pip install -e .
 
 - **Separated Local AI Providers**: 
   - `built-in-ai/core` - Chrome/Edge Prompt API (Gemini Nano, Phi-4 Mini)
+  - `built-in-ai/transformers` - Transformers.js local inference with HuggingFace models
   - `built-in-ai/webllm` - WebLLM local inference with open-source models
-- **Auto-Fallback**: Automatically uses `built-in-ai/core` if available, falls back to `built-in-ai/webllm`
+- **Auto-Fallback**: Automatically uses `built-in-ai/core` if available, falls back to `built-in-ai/transformers`, then `built-in-ai/webllm`
 - **Dynamic Model Listing**: Fetches available WebLLM models dynamically from `prebuiltAppConfig`
 - **Model Filtering**: Filter by name pattern, low-resource, or VRAM requirements
 - **Download Progress**: Shows model download progress during WebLLM model loading
@@ -36,7 +37,11 @@ By default, the kernel auto-selects a local AI provider:
    - Requires enabling in `chrome://flags` or `edge://flags`
    - Model: `text` (only option)
 
-2. **built-in-ai/webllm** (fallback): Local inference via WebGPU
+2. **built-in-ai/transformers** (first fallback): Local inference with Transformers.js
+   - Works in modern browsers with WASM support
+   - HuggingFace models (Qwen, Llama, Phi, SmolLM, etc.)
+
+3. **built-in-ai/webllm** (second fallback): Local inference via WebGPU
    - Works in any WebGPU-enabled browser
    - Many models available (Llama, Qwen, Phi, SmolLM, etc.)
 
@@ -48,6 +53,10 @@ No API key needed!
 %chat model text
 Hello! How are you?
 
+# Or use Transformers.js for local inference with HuggingFace models
+%chat provider built-in-ai/transformers
+%chat model HuggingFaceTB/SmolLM2-360M-Instruct
+
 # Or use WebLLM for local inference with open-source models
 %chat provider built-in-ai/webllm
 %chat model SmolLM2-360M-Instruct-q4f16_1-MLC
@@ -58,6 +67,9 @@ Hello! How are you?
 ```python
 # List all available providers
 %chat list
+
+# List Transformers.js models
+%chat list built-in-ai/transformers
 
 # List WebLLM models
 %chat list built-in-ai/webllm
@@ -124,7 +136,12 @@ Or still use magic commands as shown above.
   - Model: `text` (Gemini Nano or Phi-4 Mini depending on browser)
   - Requires flag enabled in browser settings
   
-- **built-in-ai/webllm**: WebLLM local inference (fallback, no API key needed)
+- **built-in-ai/transformers**: Transformers.js local inference (first fallback, no API key needed)
+  - HuggingFace models: Qwen2.5, Llama-3.2, Phi-3.5, SmolLM2, etc.
+  - Use `%chat list built-in-ai/transformers` to see available models
+  - Works in modern browsers with WASM support
+  
+- **built-in-ai/webllm**: WebLLM local inference (second fallback, no API key needed)
   - Many models: Llama-3.2, Qwen2.5, Phi-3.5, SmolLM2, etc.
   - Use `%chat list built-in-ai/webllm` to see all available models
   - Requires WebGPU-enabled browser
