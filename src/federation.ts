@@ -191,6 +191,11 @@ const container = {
             if (this.pendingModel) {
               return this.pendingModel;
             }
+            // If user explicitly switched providers, use provider-specific default
+            if (this.pendingProvider) {
+              return await getDefaultModel(providerName);
+            }
+            // Otherwise use settings default or provider default
             return await getDefaultModelFromSettings(providerName);
           }
 
@@ -368,6 +373,7 @@ const container = {
         class AISdkLiteKernel extends BaseKernel {
           private chat: AIChatKernel;
           private abortController: AbortController | null = null;
+          private lastProgressMessage: string = '';
 
           constructor(options: any) {
             super(options);
@@ -377,7 +383,17 @@ const container = {
             this.chat.setProgressCallback((text: string) => {
               // Log to console instead of notebook output
               // Progress messages are for model downloads which can be verbose
-              console.info(`[ai-sdk-chat-kernel] ${text.trim()}`);
+              const trimmed = text.trim();
+              
+              // Deduplicate download progress messages to avoid hundreds of identical logs
+              if (trimmed.toLowerCase().includes('download')) {
+                if (trimmed === this.lastProgressMessage) {
+                  return; // Skip duplicate
+                }
+                this.lastProgressMessage = trimmed;
+              }
+              
+              console.info(`[ai-sdk-chat-kernel] ${trimmed}`);
             });
           }
 
