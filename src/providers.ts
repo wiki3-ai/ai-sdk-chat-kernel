@@ -87,8 +87,8 @@ export async function isTransformersSupported(): Promise<ProviderSupport> {
   if (cached) return cached;
 
   try {
-    const { doesBrowserSupportTransformers } = await import('@built-in-ai/transformers-js');
-    const supported = doesBrowserSupportTransformers();
+    const { doesBrowserSupportTransformersJS } = await import('@built-in-ai/transformers-js');
+    const supported = doesBrowserSupportTransformersJS();
     const result: ProviderSupport = {
       supported,
       reason: supported ? undefined : 'Transformers.js not available in this browser'
@@ -392,8 +392,8 @@ export async function getModelAvailability(
       }
 
       case 'built-in-ai/transformers': {
-        const { transformers } = await import('@built-in-ai/transformers-js');
-        const model = transformers(modelId);
+        const { transformersJS } = await import('@built-in-ai/transformers-js');
+        const model = transformersJS(modelId);
         const status = await model.availability();
         return { status: status as ModelAvailability['status'] };
       }
@@ -482,8 +482,8 @@ export async function createTransformersProvider(
     throw new Error(`built-in-ai/transformers not available: ${support.reason}`);
   }
 
-  const { transformers } = await import('@built-in-ai/transformers-js');
-  const model = transformers(modelId);
+  const { transformersJS } = await import('@built-in-ai/transformers-js');
+  const model = transformersJS(modelId);
 
   // Check availability and potentially download
   const availability = await model.availability();
@@ -493,7 +493,7 @@ export async function createTransformersProvider(
     throw new Error(`Model ${modelId} is unavailable`);
   }
 
-  if (availability === 'downloadable' || availability === 'downloading') {
+  if (availability === 'downloadable') {
     console.info(`[providers] Downloading model ${modelId}...`);
     if (onProgress) {
       onProgress({ progress: 0, text: `Downloading ${modelId}...` });
