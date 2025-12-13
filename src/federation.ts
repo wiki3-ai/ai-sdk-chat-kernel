@@ -189,14 +189,19 @@ const container = {
            */
           private async getModelToUse(providerName: string): Promise<string> {
             if (this.pendingModel) {
+              console.debug(`[AIChatKernel] Using explicit model: ${this.pendingModel}`);
               return this.pendingModel;
             }
             // If user explicitly switched providers, use provider-specific default
             if (this.pendingProvider) {
-              return await getDefaultModel(providerName);
+              const defaultModel = await getDefaultModel(providerName);
+              console.debug(`[AIChatKernel] Provider switched, using provider default: ${defaultModel}`);
+              return defaultModel;
             }
             // Otherwise use settings default or provider default
-            return await getDefaultModelFromSettings(providerName);
+            const model = await getDefaultModelFromSettings(providerName);
+            console.debug(`[AIChatKernel] Using settings/provider default: ${model}`);
+            return model;
           }
 
           /**
@@ -594,6 +599,11 @@ Note:
                 status += "\n\nPending configuration:";
                 if (config.pendingProvider) {
                   status += `\n  Provider: ${config.pendingProvider}`;
+                  // Show what model will be used
+                  if (!config.pendingModel) {
+                    const defaultModel = await getDefaultModel(config.pendingProvider);
+                    status += `\n  Model: ${defaultModel} (provider default)`;
+                  }
                 }
                 if (config.pendingModel) {
                   status += `\n  Model: ${config.pendingModel}`;
