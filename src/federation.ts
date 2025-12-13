@@ -225,7 +225,7 @@ const container = {
               
               // Progress callback for model download
               const progressCallback = (report: ProgressReport) => {
-                console.debug(`[AIChatKernel] Progress: ${report.text}`);
+                // Don't log here - let the onProgress callback handle it to avoid duplication
                 if (this.onProgress) {
                   this.onProgress(report.text + '\n');
                 }
