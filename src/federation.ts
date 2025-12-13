@@ -45,8 +45,10 @@ function getApiKeyFromSettings(): string | null {
  * Get the default model from settings, or provider-specific default
  */
 async function getDefaultModelFromSettings(providerName: string): Promise<string> {
-  // If settings specify a model, use it
-  if (settingsDefaultModel) {
+  // Only use settings model if we're using the settings provider
+  // This ensures that when users switch providers, they get the correct default model
+  const settingsProvider = getDefaultProviderFromSettings();
+  if (settingsDefaultModel && providerName === settingsProvider) {
     return settingsDefaultModel;
   }
   // Otherwise use provider-specific default from providers.ts
