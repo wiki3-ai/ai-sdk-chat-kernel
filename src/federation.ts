@@ -1406,8 +1406,8 @@ Note:
             this.node.innerHTML = `
               <div class="jp-StatusBar-GroupItem ai-status-content">
                 <span class="ai-status-spinner"></span>
-                <span class="jp-StatusBar-TextItem ai-status-message">Initializing...</span>
                 <button class="ai-status-cancel" title="Cancel">×</button>
+                <span class="jp-StatusBar-TextItem ai-status-message">Initializing...</span>
               </div>
             `;
 
@@ -1433,11 +1433,8 @@ Note:
           }
 
           updateProgress(message: string, percent: number, status: string = 'loading'): void {
-            // Truncate long messages
-            const shortMsg = message.length > 40 ? message.substring(0, 37) + '...' : message;
-            
             if (status === 'complete') {
-              this.messageSpan.textContent = '✓ ' + shortMsg;
+              this.messageSpan.textContent = '✓ ' + message;
               this.spinner.style.display = 'none';
               this.cancelBtn.style.display = 'none';
               this.node.classList.remove('ai-status-error');
@@ -1447,16 +1444,16 @@ Note:
               this.cancelBtn.style.display = 'none';
               this.node.classList.remove('ai-status-error');
             } else if (status === 'error') {
-              this.messageSpan.textContent = '✗ ' + shortMsg;
+              this.messageSpan.textContent = '✗ ' + message;
               this.spinner.style.display = 'none';
               this.cancelBtn.style.display = 'none';
               this.node.classList.add('ai-status-error');
             } else {
               // Loading
               if (percent > 0 && percent < 100) {
-                this.messageSpan.textContent = `${shortMsg} (${Math.round(percent)}%)`;
+                this.messageSpan.textContent = `${message} (${Math.round(percent)}%)`;
               } else {
-                this.messageSpan.textContent = shortMsg;
+                this.messageSpan.textContent = message;
               }
               this.spinner.style.display = 'inline-block';
               this.cancelBtn.style.display = 'inline-block';
@@ -1509,12 +1506,14 @@ Note:
             style.id = 'ai-status-progress-styles';
             style.textContent = `
               .ai-status-progress.lm-Widget.jp-StatusBar-Item {
-                /* Inherit JupyterLab status bar styling */
+                flex: 1;
+                min-width: 0;
               }
               .ai-status-progress .ai-status-content {
                 display: flex;
                 align-items: center;
                 gap: 4px;
+                width: 100%;
               }
               .ai-status-progress.lm-mod-hidden {
                 display: none !important;
@@ -1547,7 +1546,8 @@ Note:
                 to { transform: rotate(360deg); }
               }
               .ai-status-message {
-                max-width: 200px;
+                flex: 1;
+                min-width: 0;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
@@ -1562,7 +1562,7 @@ Note:
                 padding: 0 2px;
                 border-radius: 2px;
                 opacity: 0.6;
-                margin-left: 2px;
+                flex-shrink: 0;
               }
               .ai-status-cancel:hover {
                 opacity: 1;
