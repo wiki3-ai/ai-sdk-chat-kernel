@@ -141,6 +141,175 @@ const container = {
 
         console.log("[ai-sdk-chat-kernel/federation] Got BaseKernel from shared scope:", BaseKernel);
 
+        // Comm target name for progress/cancellation communication
+        const PROGRESS_COMM_TARGET = 'ai-sdk-chat-kernel:progress';
+
+        /**
+         * Progress/cancellation state shared between comm manager and operations
+         */
+        interface ProgressState {
+          isCancelled: boolean;
+          abortController: AbortController;
+        }
+
+        /**
+         * Manages comm-based progress reporting and cancellation
+         * Handles bidirectional communication between kernel and frontend
+         */
+        class ProgressCommManager {
+          private kernel: any; // Reference to BaseKernel for handleComm
+          private commId: string | null = null;
+          private state: ProgressState;
+          private isOpen: boolean = false;
+
+          constructor(kernel: any) {
+            this.kernel = kernel;
+            this.state = {
+              isCancelled: false,
+              abortController: new AbortController()
+            };
+          }
+
+          /**
+           * Get the current progress state (for passing to operations)
+           */
+          getState(): ProgressState {
+            return this.state;
+          }
+
+          /**
+           * Reset state for a new operation
+           */
+          reset(): void {
+            this.state = {
+              isCancelled: false,
+              abortController: new AbortController()
+            };
+          }
+
+          /**
+           * Open a comm channel to the frontend for progress updates
+           */
+          open(parentHeader?: any): void {
+            if (this.isOpen) {
+              // Already open, just reset state
+              this.reset();
+              return;
+            }
+
+            this.commId = `progress-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            this.reset();
+
+            // Send comm_open message to frontend
+            this.kernel.handleComm(
+              'comm_open',
+              {
+                comm_id: this.commId,
+                target_name: PROGRESS_COMM_TARGET,
+                data: { type: 'init' }
+              },
+              {},
+              [],
+              parentHeader
+            );
+
+            this.isOpen = true;
+            console.debug('[ProgressComm] Opened comm channel:', this.commId);
+          }
+
+          /**
+           * Send a progress update to the frontend
+           */
+          sendProgress(
+            message: string,
+            percent: number,
+            status: 'loading' | 'complete' | 'error' | 'cancelled' = 'loading',
+            parentHeader?: any
+          ): void {
+            if (!this.isOpen || !this.commId) {
+              console.debug('[ProgressComm] Not open, skipping progress:', message);
+              return;
+            }
+
+            this.kernel.handleComm(
+              'comm_msg',
+              {
+                comm_id: this.commId,
+                data: {
+                  type: 'progress_update',
+                  message,
+                  percent,
+                  status,
+                  timestamp: Date.now()
+                }
+              },
+              {},
+              [],
+              parentHeader
+            );
+
+            console.debug(`[ProgressComm] ${percent}% - ${message}`);
+          }
+
+          /**
+           * Close the comm channel
+           */
+          close(parentHeader?: any): void {
+            if (!this.isOpen || !this.commId) {
+              return;
+            }
+
+            this.kernel.handleComm(
+              'comm_close',
+              {
+                comm_id: this.commId,
+                data: { type: 'close' }
+              },
+              {},
+              [],
+              parentHeader
+            );
+
+            this.isOpen = false;
+            this.commId = null;
+            console.debug('[ProgressComm] Closed comm channel');
+          }
+
+          /**
+           * Handle incoming comm message from frontend (e.g., cancel)
+           */
+          handleMessage(commId: string, data: any): boolean {
+            if (commId !== this.commId) {
+              return false; // Not our comm
+            }
+
+            if (data?.type === 'cancel') {
+              console.info('[ProgressComm] Cancel requested by user');
+              this.state.isCancelled = true;
+              this.state.abortController.abort();
+              return true;
+            }
+
+            return false;
+          }
+
+          /**
+           * Check if cancellation was requested
+           */
+          isCancelled(): boolean {
+            return this.state.isCancelled;
+          }
+
+          /**
+           * Throw if cancelled (for use in async operations)
+           */
+          checkCancelled(): void {
+            if (this.state.isCancelled) {
+              throw new DOMException('Operation cancelled by user', 'AbortError');
+            }
+          }
+        }
+
         /**
          * Chat kernel using Vercel AI SDK
          * 
@@ -247,15 +416,23 @@ const container = {
             providerName: string, 
             modelName: string, 
             apiKey: string | null,
-            progressCallback: (report: ProgressReport) => void
+            progressCallback: (report: ProgressReport) => void,
+            checkCancelled?: () => void
           ): Promise<{ success: boolean; error?: string }> {
             try {
+              // Check for cancellation before starting
+              if (checkCancelled) checkCancelled();
+              
               console.info(`[AIChatKernel] Trying to create session: ${providerName}/${modelName}`);
               
               // Release any previous shared resources before creating new session
               this.releaseSharedResources();
               
               const result = await createProvider(providerName, modelName, apiKey ?? undefined, progressCallback);
+              
+              // Check for cancellation after provider creation
+              if (checkCancelled) checkCancelled();
+              
               this.languageModel = result.model;
               this.activeProvider = providerName;
               this.activeModel = modelName;
@@ -270,6 +447,10 @@ const container = {
               console.info(`[AIChatKernel] Session created successfully: ${providerName}/${modelName}`);
               return { success: true };
             } catch (error: any) {
+              // Re-throw abort errors
+              if (error.name === 'AbortError') {
+                throw error;
+              }
               console.warn(`[AIChatKernel] Failed to initialize ${providerName}:`, error.message);
               return { success: false, error: error.message };
             }
@@ -279,16 +460,31 @@ const container = {
            * Create the AI session with current configuration.
            * Called lazily when first message is sent.
            * If in auto-select mode, will try providers in order until one works.
+           * @param progressComm Optional progress comm manager for UI updates and cancellation
            */
-          private async createSession(): Promise<void> {
+          private async createSession(progressComm?: ProgressCommManager): Promise<void> {
             const apiKey = this.getApiKey();
             
-            // Progress callback for model download
+            // Progress callback for model download - sends to both console and comm
             const progressCallback = (report: ProgressReport) => {
+              // Console output (existing behavior)
               if (this.onProgress) {
                 this.onProgress(report.text + '\n');
               }
+              // Comm-based progress (new)
+              if (progressComm) {
+                // Convert report to percentage if we have progress info
+                const percent = report.progress !== undefined 
+                  ? Math.round(report.progress * 100) 
+                  : -1; // indeterminate
+                progressComm.sendProgress(report.text, percent >= 0 ? percent : 50, 'loading');
+              }
             };
+            
+            // Cancellation check function
+            const checkCancelled = progressComm 
+              ? () => progressComm.checkCancelled() 
+              : undefined;
 
             // If user explicitly configured a provider, use it (no fallback)
             let providerName = this.getProviderToUse();
@@ -301,7 +497,7 @@ const container = {
                 throw new Error(`API key required for ${providerName}.\n\nSet it in: Settings > AI SDK Chat Kernel > API Key\n\nOr use magic commands:\n  %chat provider ${providerName} --key\n  %chat key`);
               }
 
-              const result = await this.tryCreateSessionWithProvider(providerName, modelName, apiKey, progressCallback);
+              const result = await this.tryCreateSessionWithProvider(providerName, modelName, apiKey, progressCallback, checkCancelled);
               if (!result.success) {
                 throw new Error(`Failed to create session with ${providerName}/${modelName}: ${result.error}`);
               }
@@ -321,8 +517,11 @@ const container = {
             // Try providers with fallback
             const errors: string[] = [];
             while (providerName) {
+              // Check cancellation before trying each provider
+              if (checkCancelled) checkCancelled();
+              
               const modelName = await getDefaultModel(providerName);
-              const result = await this.tryCreateSessionWithProvider(providerName, modelName, apiKey, progressCallback);
+              const result = await this.tryCreateSessionWithProvider(providerName, modelName, apiKey, progressCallback, checkCancelled);
               
               if (result.success) {
                 return;
@@ -461,15 +660,17 @@ const container = {
            * @param prompt The user's message
            * @param onChunk Callback for each streamed chunk
            * @param abortSignal Optional signal to abort the request
+           * @param progressComm Optional progress comm manager for UI updates
            */
           async send(
             prompt: string, 
             onChunk?: (chunk: string) => void,
-            abortSignal?: AbortSignal
+            abortSignal?: AbortSignal,
+            progressComm?: ProgressCommManager
           ): Promise<string> {
-            // Create or refresh session if needed
+            // Create or refresh session if needed (with progress reporting)
             if (this.needsSessionRefresh()) {
-              await this.createSession();
+              await this.createSession(progressComm);
             }
 
             if (!this.languageModel) {
@@ -519,10 +720,13 @@ const container = {
           private chat: AIChatKernel;
           private abortController: AbortController | null = null;
           private lastProgressMessage: string = '';
+          private progressComm: ProgressCommManager;
+          private activeCommIds: Set<string> = new Set();
 
           constructor(options: any) {
             super(options);
             this.chat = new AIChatKernel();
+            this.progressComm = new ProgressCommManager(this);
             
             // Set up progress callback to log to console (keeps notebook output clean)
             this.chat.setProgressCallback((text: string) => {
@@ -841,6 +1045,10 @@ Note:
             this.abortController = new AbortController();
             const signal = this.abortController.signal;
             
+            // Open progress comm for this execution
+            // @ts-ignore - parentHeader is protected but we need it
+            this.progressComm.open(this.parentHeader);
+            
             try {
               // Split code into lines and process magic commands
               const lines = code.split('\n');
@@ -874,7 +1082,7 @@ Note:
               // If there's non-magic content, send it as a prompt
               const prompt = nonMagicLines.join('\n').trim();
               if (prompt) {
-                // Stream each chunk as it arrives, passing abort signal
+                // Stream each chunk as it arrives, passing abort signal and progress comm
                 await this.chat.send(prompt, (chunk: string) => {
                   // @ts-ignore
                   this.stream(
@@ -882,10 +1090,14 @@ Note:
                     // @ts-ignore
                     this.parentHeader
                   );
-                }, signal);
+                }, signal, this.progressComm);
               } else if (magicResults.length === 0) {
                 // Empty cell - do nothing
               }
+              
+              // Send completion status
+              // @ts-ignore
+              this.progressComm.sendProgress('Ready', 100, 'complete', this.parentHeader);
 
               return {
                 status: "ok",
@@ -899,7 +1111,9 @@ Note:
               const isAbortError = err?.name === 'AbortError' || err?.message?.includes('aborted');
               
               if (isAbortError) {
-                // User interrupted - don't show as error
+                // User interrupted - send cancelled status
+                // @ts-ignore
+                this.progressComm.sendProgress('Cancelled', -1, 'cancelled', this.parentHeader);
                 console.info('[AISdkLiteKernel] Execution aborted by user');
                 return {
                   status: "abort",
@@ -909,6 +1123,8 @@ Note:
               }
               
               const message = err?.message ?? String(err);
+              // @ts-ignore
+              this.progressComm.sendProgress(`Error: ${message}`, -1, 'error', this.parentHeader);
               console.error('[AISdkLiteKernel] Execution error:', message);
               
               // @ts-ignore
@@ -930,8 +1146,13 @@ Note:
                 traceback: err?.stack ? [err.stack] : [],
               };
             } finally {
-              // Clean up abort controller
+              // Clean up abort controller and close progress comm
               this.abortController = null;
+              // Close comm after a short delay to allow final status to be received
+              setTimeout(() => {
+                // @ts-ignore
+                this.progressComm.close(this.parentHeader);
+              }, 1500);
             }
           }
 
@@ -999,9 +1220,39 @@ Note:
             }
           }
 
-          async commOpen(_content: any): Promise<void> { }
-          async commMsg(_content: any): Promise<void> { }
-          async commClose(_content: any): Promise<void> { }
+          async commOpen(msg: any): Promise<void> {
+            // Track comm IDs opened by frontend (for potential future use)
+            const commId = msg?.content?.comm_id;
+            if (commId) {
+              this.activeCommIds.add(commId);
+              console.debug('[AISdkLiteKernel] Comm opened:', commId);
+            }
+          }
+          
+          async commMsg(msg: any): Promise<void> {
+            // Handle incoming messages from frontend
+            const commId = msg?.content?.comm_id;
+            const data = msg?.content?.data;
+            
+            console.debug('[AISdkLiteKernel] Comm message received:', commId, data);
+            
+            // Check if this is a cancel message for our progress comm
+            if (this.progressComm.handleMessage(commId, data)) {
+              // Cancel was handled - abort current operation
+              if (this.abortController) {
+                this.abortController.abort();
+              }
+            }
+          }
+          
+          async commClose(msg: any): Promise<void> {
+            // Track comm IDs closed by frontend
+            const commId = msg?.content?.comm_id;
+            if (commId) {
+              this.activeCommIds.delete(commId);
+              console.debug('[AISdkLiteKernel] Comm closed:', commId);
+            }
+          }
         }
 
         // Try to get ISettingRegistry from shared scope (optional)
@@ -1137,7 +1388,375 @@ Note:
           },
         };
 
-        const plugins = [aiSdkChatKernelPlugin];
+        /**
+         * Progress display UI widget with cancel button
+         * Shown as a modal overlay during long operations
+         */
+        class ProgressWidget {
+          private node: HTMLElement;
+          private progressBar: HTMLProgressElement;
+          private messageDiv: HTMLElement;
+          private percentDiv: HTMLElement;
+          private cancelButton: HTMLButtonElement;
+          private onCancel: (() => void) | null = null;
+
+          constructor() {
+            this.node = document.createElement('div');
+            this.node.className = 'kernel-progress-modal';
+            this.node.innerHTML = `
+              <div class="kernel-progress-overlay"></div>
+              <div class="kernel-progress-container">
+                <div class="kernel-progress-header">
+                  <h3>Initializing AI Model</h3>
+                  <button class="kernel-progress-close" aria-label="Cancel">×</button>
+                </div>
+                <div class="kernel-progress-body">
+                  <div class="kernel-progress-message">Starting...</div>
+                  <progress class="kernel-progress-bar" max="100" value="0"></progress>
+                  <div class="kernel-progress-percent">0%</div>
+                </div>
+                <div class="kernel-progress-footer">
+                  <button class="kernel-progress-cancel-btn">Cancel Operation</button>
+                </div>
+              </div>
+            `;
+
+            this.progressBar = this.node.querySelector('.kernel-progress-bar')!;
+            this.messageDiv = this.node.querySelector('.kernel-progress-message')!;
+            this.percentDiv = this.node.querySelector('.kernel-progress-percent')!;
+            this.cancelButton = this.node.querySelector('.kernel-progress-cancel-btn')!;
+
+            const closeButton = this.node.querySelector('.kernel-progress-close')!;
+
+            this.cancelButton.addEventListener('click', () => this.handleCancel());
+            closeButton.addEventListener('click', () => this.handleCancel());
+
+            this.addStyles();
+            this.hide();
+          }
+
+          onCancelRequested(callback: () => void): void {
+            this.onCancel = callback;
+          }
+
+          private handleCancel(): void {
+            this.cancelButton.disabled = true;
+            this.cancelButton.textContent = 'Cancelling...';
+            if (this.onCancel) {
+              this.onCancel();
+            }
+          }
+
+          updateProgress(message: string, percent: number, status: string = 'loading'): void {
+            this.messageDiv.textContent = message;
+
+            if (percent === -1) {
+              this.progressBar.removeAttribute('value');
+              this.percentDiv.textContent = status === 'cancelled' ? 'Cancelled' : 'Error';
+              this.node.classList.toggle('kernel-progress-error', status === 'error');
+              this.node.classList.toggle('kernel-progress-cancelled', status === 'cancelled');
+              this.cancelButton.disabled = true;
+            } else if (percent === 100) {
+              this.progressBar.value = 100;
+              this.percentDiv.textContent = '100%';
+              this.cancelButton.disabled = true;
+              this.node.classList.remove('kernel-progress-error', 'kernel-progress-cancelled');
+            } else {
+              this.progressBar.value = percent;
+              this.percentDiv.textContent = `${Math.round(percent)}%`;
+              this.node.classList.remove('kernel-progress-error', 'kernel-progress-cancelled');
+            }
+          }
+
+          show(): void {
+            this.node.style.display = 'flex';
+            this.cancelButton.disabled = false;
+            this.cancelButton.textContent = 'Cancel Operation';
+            this.progressBar.value = 0;
+            this.messageDiv.textContent = 'Starting...';
+            this.percentDiv.textContent = '0%';
+            this.node.classList.remove('kernel-progress-error', 'kernel-progress-cancelled');
+          }
+
+          hide(): void {
+            this.node.style.display = 'none';
+          }
+
+          attachTo(parent: HTMLElement = document.body): void {
+            parent.appendChild(this.node);
+          }
+
+          private addStyles(): void {
+            if (document.getElementById('kernel-progress-styles')) return;
+
+            const style = document.createElement('style');
+            style.id = 'kernel-progress-styles';
+            style.textContent = `
+              .kernel-progress-modal {
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                z-index: 10000;
+                align-items: center;
+                justify-content: center;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              }
+              .kernel-progress-overlay {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(0, 0, 0, 0.3);
+                z-index: 1;
+              }
+              .kernel-progress-container {
+                position: relative;
+                z-index: 2;
+                background: var(--jp-layout-color1, white);
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                width: 100%;
+                max-width: 500px;
+                overflow: hidden;
+              }
+              .kernel-progress-header {
+                display: flex;
+                align-items: center;
+                justify-content: space-between;
+                padding: 16px 20px;
+                border-bottom: 1px solid var(--jp-border-color2, #e0e0e0);
+              }
+              .kernel-progress-header h3 {
+                margin: 0;
+                font-size: 16px;
+                font-weight: 600;
+                color: var(--jp-ui-font-color1, #333);
+              }
+              .kernel-progress-close {
+                background: none;
+                border: none;
+                font-size: 24px;
+                cursor: pointer;
+                color: var(--jp-ui-font-color2, #666);
+                padding: 0;
+                width: 32px;
+                height: 32px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 4px;
+                transition: background 0.2s;
+              }
+              .kernel-progress-close:hover {
+                background: var(--jp-layout-color2, #f0f0f0);
+              }
+              .kernel-progress-body {
+                padding: 20px;
+              }
+              .kernel-progress-message {
+                font-size: 14px;
+                color: var(--jp-ui-font-color1, #555);
+                margin-bottom: 12px;
+                min-height: 20px;
+                word-wrap: break-word;
+              }
+              .kernel-progress-bar {
+                width: 100%;
+                height: 8px;
+                border: none;
+                border-radius: 4px;
+                background: var(--jp-layout-color3, #e0e0e0);
+                overflow: hidden;
+              }
+              .kernel-progress-bar::-webkit-progress-bar {
+                background: var(--jp-layout-color3, #e0e0e0);
+                border-radius: 4px;
+              }
+              .kernel-progress-bar::-webkit-progress-value {
+                background: var(--jp-brand-color1, #2196f3);
+                border-radius: 4px;
+                transition: width 0.3s ease;
+              }
+              .kernel-progress-bar::-moz-progress-bar {
+                background: var(--jp-brand-color1, #2196f3);
+                border-radius: 4px;
+              }
+              .kernel-progress-bar:indeterminate {
+                background: linear-gradient(90deg, 
+                  var(--jp-layout-color3, #e0e0e0) 0%, 
+                  var(--jp-brand-color1, #2196f3) 50%, 
+                  var(--jp-layout-color3, #e0e0e0) 100%);
+                background-size: 200% 100%;
+                animation: progress-indeterminate 1.5s linear infinite;
+              }
+              @keyframes progress-indeterminate {
+                0% { background-position: 100% 0; }
+                100% { background-position: -100% 0; }
+              }
+              .kernel-progress-percent {
+                font-size: 12px;
+                color: var(--jp-ui-font-color2, #999);
+                margin-top: 8px;
+                text-align: right;
+              }
+              .kernel-progress-footer {
+                padding: 16px 20px;
+                border-top: 1px solid var(--jp-border-color2, #e0e0e0);
+                text-align: right;
+              }
+              .kernel-progress-cancel-btn {
+                background: var(--jp-error-color1, #f44336);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 14px;
+                font-weight: 500;
+                transition: background 0.2s;
+              }
+              .kernel-progress-cancel-btn:hover:not(:disabled) {
+                background: var(--jp-error-color2, #d32f2f);
+              }
+              .kernel-progress-cancel-btn:disabled {
+                opacity: 0.6;
+                cursor: not-allowed;
+              }
+              .kernel-progress-error .kernel-progress-bar::-webkit-progress-value,
+              .kernel-progress-error .kernel-progress-bar::-moz-progress-bar {
+                background: var(--jp-error-color1, #d32f2f);
+              }
+              .kernel-progress-error .kernel-progress-message {
+                color: var(--jp-error-color1, #d32f2f);
+              }
+              .kernel-progress-cancelled .kernel-progress-message {
+                color: var(--jp-warn-color1, #ff9800);
+              }
+            `;
+            document.head.appendChild(style);
+          }
+        }
+
+        /**
+         * Progress display extension plugin
+         * Listens for progress comm messages from the kernel and displays a UI
+         */
+        const progressExtensionPlugin = {
+          id: "@wiki3-ai/ai-sdk-chat-kernel:progress-ui",
+          autoStart: true,
+          requires: [],
+          activate: async (app: any) => {
+            console.log("[ai-sdk-chat-kernel:progress-ui] Activating progress UI extension");
+
+            // Create progress widget
+            const progressWidget = new ProgressWidget();
+            progressWidget.attachTo(document.body);
+
+            // Track active comms and their associated kernels
+            const activeComms = new Map<string, { kernel: any; commId: string }>();
+
+            // When user clicks cancel, send message to kernel
+            progressWidget.onCancelRequested(() => {
+              for (const [commId, { kernel }] of activeComms) {
+                console.log('[progress-ui] Sending cancel to kernel via comm:', commId);
+                if (kernel && kernel.sendCommMessage) {
+                  kernel.sendCommMessage(commId, { type: 'cancel' });
+                } else if (kernel && kernel.requestCommInfo) {
+                  // Fallback: try to send via session
+                  console.log('[progress-ui] Using session to send cancel');
+                }
+              }
+            });
+
+            // Listen for kernel sessions
+            try {
+              const sessionModule = await importShared('@jupyterlab/services');
+              const { Kernel } = sessionModule;
+              
+              // Function to set up comm listening on a kernel
+              const setupKernelCommListener = (kernel: any) => {
+                if (!kernel) return;
+                
+                console.log('[progress-ui] Setting up comm listener for kernel:', kernel.id);
+                
+                // Register handler for our comm target
+                kernel.registerCommTarget(PROGRESS_COMM_TARGET, (comm: any, openMsg: any) => {
+                  const commId = comm.commId || openMsg?.content?.comm_id;
+                  console.log('[progress-ui] Comm opened from kernel:', commId);
+                  
+                  // Track this comm
+                  activeComms.set(commId, { kernel, commId });
+                  
+                  // Show progress UI
+                  progressWidget.show();
+                  
+                  // Handle messages
+                  comm.onMsg = (msg: any) => {
+                    const data = msg?.content?.data;
+                    console.log('[progress-ui] Comm message:', data);
+                    
+                    if (data?.type === 'progress_update') {
+                      progressWidget.updateProgress(
+                        data.message || '',
+                        data.percent ?? 0,
+                        data.status || 'loading'
+                      );
+                      
+                      // Auto-hide after complete or error
+                      if (data.percent === 100 || data.percent === -1) {
+                        setTimeout(() => {
+                          progressWidget.hide();
+                        }, 2000);
+                      }
+                    }
+                  };
+                  
+                  // Handle close
+                  comm.onClose = () => {
+                    console.log('[progress-ui] Comm closed:', commId);
+                    activeComms.delete(commId);
+                    // Hide if no more active comms
+                    if (activeComms.size === 0) {
+                      progressWidget.hide();
+                    }
+                  };
+                });
+              };
+
+              // Try to get notebook tracker to monitor kernels
+              try {
+                const notebookModule = await importShared('@jupyterlab/notebook');
+                const { INotebookTracker } = notebookModule;
+                
+                // This will be called when a notebook kernel changes
+                const tracker = app.serviceManager?.sessions;
+                if (tracker) {
+                  // Listen for session changes
+                  tracker.runningChanged?.connect((_sender: any, models: any) => {
+                    for (const model of models) {
+                      const session = tracker.connectTo({ model });
+                      if (session?.kernel) {
+                        setupKernelCommListener(session.kernel);
+                      }
+                    }
+                  });
+                }
+              } catch (e) {
+                console.log('[progress-ui] Could not set up notebook tracking:', e);
+              }
+
+              console.log('[progress-ui] Progress UI extension activated');
+            } catch (e) {
+              console.warn('[progress-ui] Could not set up kernel comm listening:', e);
+            }
+          },
+        };
+
+        const plugins = [aiSdkChatKernelPlugin, progressExtensionPlugin];
         console.log("[ai-sdk-chat-kernel/federation] ===== PLUGIN CREATED SUCCESSFULLY =====");
         console.log("[ai-sdk-chat-kernel/federation] Plugin ID:", aiSdkChatKernelPlugin.id);
         console.log("[ai-sdk-chat-kernel/federation] Plugin autoStart:", aiSdkChatKernelPlugin.autoStart);
