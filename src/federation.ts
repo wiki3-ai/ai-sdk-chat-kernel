@@ -219,6 +219,7 @@ const container = {
 
           /**
            * Send a progress update to the frontend
+           * Deduplicates repeated identical messages
            */
           sendProgress(
             message: string,
@@ -227,7 +228,6 @@ const container = {
             parentHeader?: any
           ): void {
             if (!this.isOpen || !this.commId) {
-              console.debug('[ProgressComm] Not open, skipping progress:', message);
               return;
             }
 
@@ -465,8 +465,17 @@ const container = {
           private async createSession(progressComm?: ProgressCommManager): Promise<void> {
             const apiKey = this.getApiKey();
             
+            // Track last message for deduplication (providers like Transformers.js spam duplicates)
+            let lastProgressMessage = '';
+            
             // Progress callback for model download - sends to both console and comm
             const progressCallback = (report: ProgressReport) => {
+              // Deduplicate: skip if message is identical to the last one
+              if (report.text === lastProgressMessage) {
+                return;
+              }
+              lastProgressMessage = report.text;
+              
               // Console output (existing behavior)
               if (this.onProgress) {
                 this.onProgress(report.text + '\n');
@@ -1466,7 +1475,7 @@ Note:
             this.node.classList.remove('lm-mod-hidden');
             this.spinner.style.display = 'inline-block';
             this.cancelBtn.style.display = 'inline-block';
-            this.messageSpan.textContent = 'Initializing...';
+            this.messageSpan.textContent = 'Streaming...';
             this.node.classList.remove('ai-status-error');
           }
 
