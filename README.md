@@ -18,9 +18,9 @@ pip install -e .
 
 - **Separated Local AI Providers**: 
   - `built-in-ai/core` - Chrome/Edge Prompt API (Gemini Nano, Phi-4 Mini)
+  - `built-in-ai/webllm` - WebLLM local inference with open-source models (WebGPU)
   - `built-in-ai/transformers` - Transformers.js local inference with HuggingFace models
-  - `built-in-ai/webllm` - WebLLM local inference with open-source models
-- **Auto-Fallback**: Automatically uses `built-in-ai/core` if available, falls back to `built-in-ai/transformers`, then `built-in-ai/webllm`
+- **Smart Auto-Selection**: Automatically tries `built-in-ai/core` → `built-in-ai/webllm` → `built-in-ai/transformers` with graceful fallback if initialization fails
 - **Dynamic Model Listing**: Fetches available WebLLM models dynamically from `prebuiltAppConfig`
 - **Model Filtering**: Filter by name pattern, low-resource, or VRAM requirements
 - **Download Progress**: Shows model download progress during WebLLM model loading
@@ -31,19 +31,19 @@ pip install -e .
 
 ### Local AI Providers (Default)
 
-By default, the kernel auto-selects a local AI provider:
+By default, the kernel auto-selects a local AI provider with fallback:
 
 1. **built-in-ai/core** (preferred): Chrome/Edge built-in AI using Gemini Nano or Phi-4 Mini
    - Requires enabling in `chrome://flags` or `edge://flags`
    - Model: `text` (only option)
 
-2. **built-in-ai/transformers** (first fallback): Local inference with Transformers.js
+2. **built-in-ai/webllm** (first fallback): Local inference via WebGPU
+   - Requires WebGPU-enabled browser
+   - Many models available (Llama, Qwen, Phi, SmolLM, etc.)
+
+3. **built-in-ai/transformers** (second fallback): Local inference with Transformers.js
    - Works in modern browsers with WASM support
    - HuggingFace models (Qwen, Llama, Phi, SmolLM, etc.)
-
-3. **built-in-ai/webllm** (second fallback): Local inference via WebGPU
-   - Works in any WebGPU-enabled browser
-   - Many models available (Llama, Qwen, Phi, SmolLM, etc.)
 
 No API key needed!
 
@@ -53,13 +53,13 @@ No API key needed!
 %chat model text
 Hello! How are you?
 
-# Or use Transformers.js for local inference with HuggingFace models
-%chat provider built-in-ai/transformers
-%chat model HuggingFaceTB/SmolLM2-360M-Instruct
-
 # Or use WebLLM for local inference with open-source models
 %chat provider built-in-ai/webllm
 %chat model SmolLM2-360M-Instruct-q4f16_1-MLC
+
+# Or use Transformers.js for local inference with HuggingFace models
+%chat provider built-in-ai/transformers
+%chat model HuggingFaceTB/SmolLM2-360M-Instruct
 ```
 
 ### Listing and Filtering Models
@@ -68,11 +68,11 @@ Hello! How are you?
 # List all available providers
 %chat list
 
-# List Transformers.js models
-%chat list built-in-ai/transformers
-
 # List WebLLM models
 %chat list built-in-ai/webllm
+
+# List Transformers.js models
+%chat list built-in-ai/transformers
 
 # Filter models by name pattern
 %chat list built-in-ai/webllm --filter llama

@@ -11,6 +11,7 @@ import {
   checkProviderSupport,
   formatModelInfo,
   getAllProviderNames,
+  getNextFallbackProvider,
   type ModelInfo,
   type ProgressReport
 } from "./providers.js";
@@ -28,10 +29,16 @@ let settingsDefaultModel: string | null = null;
 let settingsApiKey: string | null = null;
 
 /**
- * Get the default provider from settings, falling back to the hardcoded default.
+ * Get the default provider from settings.
+ * Returns null if no provider configured (meaning auto-select should be used).
  */
-function getDefaultProviderFromSettings(): string {
-  return settingsDefaultProvider ?? DEFAULT_PROVIDER;
+function getDefaultProviderFromSettings(): string | null {
+  // If settings has a provider configured, use it
+  if (settingsDefaultProvider) {
+    return settingsDefaultProvider;
+  }
+  // DEFAULT_PROVIDER is null, indicating auto-select
+  return DEFAULT_PROVIDER;
 }
 
 /**
@@ -178,10 +185,21 @@ const container = {
           }
 
           /**
-           * Get the provider to use - pending config or settings default
+           * Get the provider to use - pending config, settings, or auto-select
+           * Returns null if no provider configured and auto-select needed
            */
-          private getProviderToUse(): string {
-            return this.pendingProvider ?? getDefaultProviderFromSettings();
+          private getProviderToUse(): string | null {
+            if (this.pendingProvider) {
+              return this.pendingProvider;
+            }
+            return getDefaultProviderFromSettings(); // May return null
+          }
+
+          /**
+           * Whether we're in auto-select mode (no explicit provider configured)
+           */
+          private isAutoSelectMode(): boolean {
+            return !this.pendingProvider && !getDefaultProviderFromSettings();
           }
 
           /**
@@ -205,41 +223,95 @@ const container = {
           }
 
           /**
-           * Create the AI session with current configuration.
-           * Called lazily when first message is sent.
+           * Try to create a session with a specific provider, returning success/failure
            */
-          private async createSession(): Promise<void> {
-            const providerName = this.getProviderToUse();
-            const modelName = await this.getModelToUse(providerName);
-            const apiKey = this.getApiKey();
-            const config = getProviderConfig(providerName);
-
-            // Check if API key is required but not provided
-            if (!apiKey && config?.requiresApiKey) {
-              throw new Error(`API key required for ${providerName}.\n\nSet it in: Settings > AI SDK Chat Kernel > API Key\n\nOr use magic commands:\n  %chat provider ${providerName} --key\n  %chat key`);
-            }
-
-            // Create language model using dynamic provider system with progress reporting
+          private async tryCreateSessionWithProvider(
+            providerName: string, 
+            modelName: string, 
+            apiKey: string | null,
+            progressCallback: (report: ProgressReport) => void
+          ): Promise<{ success: boolean; error?: string }> {
             try {
-              console.info(`[AIChatKernel] Creating session: ${providerName}/${modelName}`);
-              
-              // Progress callback for model download
-              const progressCallback = (report: ProgressReport) => {
-                // Don't log here - let the onProgress callback handle it to avoid duplication
-                if (this.onProgress) {
-                  this.onProgress(report.text + '\n');
-                }
-              };
-              
+              console.info(`[AIChatKernel] Trying to create session: ${providerName}/${modelName}`);
               this.languageModel = await createProvider(providerName, modelName, apiKey ?? undefined, progressCallback);
               this.activeProvider = providerName;
               this.activeModel = modelName;
               this.sessionInitialized = true;
-              console.info(`[AIChatKernel] Session created: ${providerName}/${modelName}`);
+              console.info(`[AIChatKernel] Session created successfully: ${providerName}/${modelName}`);
+              return { success: true };
             } catch (error: any) {
-              console.error(`[AIChatKernel] Session creation failed:`, error);
-              throw new Error(`Failed to create session with ${providerName}/${modelName}: ${error.message}`);
+              console.warn(`[AIChatKernel] Failed to initialize ${providerName}:`, error.message);
+              return { success: false, error: error.message };
             }
+          }
+
+          /**
+           * Create the AI session with current configuration.
+           * Called lazily when first message is sent.
+           * If in auto-select mode, will try providers in order until one works.
+           */
+          private async createSession(): Promise<void> {
+            const apiKey = this.getApiKey();
+            
+            // Progress callback for model download
+            const progressCallback = (report: ProgressReport) => {
+              if (this.onProgress) {
+                this.onProgress(report.text + '\n');
+              }
+            };
+
+            // If user explicitly configured a provider, use it (no fallback)
+            let providerName = this.getProviderToUse();
+            if (providerName && !this.isAutoSelectMode()) {
+              const modelName = await this.getModelToUse(providerName);
+              const config = getProviderConfig(providerName);
+
+              // Check if API key is required but not provided
+              if (!apiKey && config?.requiresApiKey) {
+                throw new Error(`API key required for ${providerName}.\n\nSet it in: Settings > AI SDK Chat Kernel > API Key\n\nOr use magic commands:\n  %chat provider ${providerName} --key\n  %chat key`);
+              }
+
+              const result = await this.tryCreateSessionWithProvider(providerName, modelName, apiKey, progressCallback);
+              if (!result.success) {
+                throw new Error(`Failed to create session with ${providerName}/${modelName}: ${result.error}`);
+              }
+              return;
+            }
+
+            // Auto-select mode: try providers in order with fallback on failure
+            console.info('[AIChatKernel] Auto-selecting provider...');
+            
+            // Get initial provider from auto-select
+            providerName = await autoSelectLocalProvider();
+            
+            if (!providerName) {
+              throw new Error('No local AI provider available.\n\nOptions:\n1. Enable Chrome/Edge Built-in AI in browser flags\n2. Use a browser with WebGPU support for WebLLM\n3. Configure a cloud provider with %chat provider openai --key');
+            }
+
+            // Try providers with fallback
+            const errors: string[] = [];
+            while (providerName) {
+              const modelName = await getDefaultModel(providerName);
+              const result = await this.tryCreateSessionWithProvider(providerName, modelName, apiKey, progressCallback);
+              
+              if (result.success) {
+                return;
+              }
+              
+              errors.push(`${providerName}: ${result.error}`);
+              
+              // Try next fallback provider
+              const nextProvider = getNextFallbackProvider(providerName);
+              if (nextProvider) {
+                console.info(`[AIChatKernel] Falling back to ${nextProvider}...`);
+                providerName = nextProvider;
+              } else {
+                providerName = null;
+              }
+            }
+
+            // All providers failed
+            throw new Error(`Failed to initialize any local AI provider:\n${errors.join('\n')}\n\nTry configuring a cloud provider with %chat provider openai --key`);
           }
 
           /**
@@ -251,7 +323,10 @@ const container = {
             const targetProvider = this.getProviderToUse();
             const targetModel = this.pendingModel; // Only check if explicitly set
             
-            if (targetProvider !== this.activeProvider) return true;
+            // In auto-select mode, don't refresh if we already have a working session
+            if (!targetProvider && this.activeProvider) return false;
+            
+            if (targetProvider && targetProvider !== this.activeProvider) return true;
             if (targetModel && targetModel !== this.activeModel) return true;
             
             return false;
@@ -612,8 +687,12 @@ Note:
               
               if (!config.sessionActive && !config.pendingProvider) {
                 const defProvider = getDefaultProviderFromSettings();
-                const defModel = await getDefaultModelFromSettings(defProvider);
-                status += `\n\nDefaults from settings:\n  Provider: ${defProvider}\n  Model: ${defModel}`;
+                if (defProvider) {
+                  const defModel = await getDefaultModelFromSettings(defProvider);
+                  status += `\n\nDefaults from settings:\n  Provider: ${defProvider}\n  Model: ${defModel}`;
+                } else {
+                  status += `\n\nNo provider configured - will auto-select on first use.\nAuto-select order: built-in-ai/core → built-in-ai/webllm → built-in-ai/transformers`;
+                }
               }
               
               return status;

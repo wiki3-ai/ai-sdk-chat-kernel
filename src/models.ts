@@ -20,7 +20,7 @@ export interface ProviderConfig {
 // Registry of available providers
 const providerRegistry: Map<string, ProviderConfig> = new Map();
 
-// Default provider suggestions
+// Default provider suggestions (order matters for auto-selection fallback)
 export const SUGGESTED_PROVIDERS: Record<string, ProviderConfig> = {
   'built-in-ai/core': {
     name: 'built-in-ai/core',
@@ -29,19 +29,19 @@ export const SUGGESTED_PROVIDERS: Record<string, ProviderConfig> = {
     isBuiltIn: true,
     description: 'Chrome/Edge built-in AI using Gemini Nano or Phi-4 Mini',
   },
-  'built-in-ai/transformers': {
-    name: 'built-in-ai/transformers',
-    displayName: 'Transformers.js (Local)',
-    requiresApiKey: false,
-    isBuiltIn: true,
-    description: 'Local inference with HuggingFace Transformers.js models',
-  },
   'built-in-ai/webllm': {
     name: 'built-in-ai/webllm',
     displayName: 'WebLLM (Local)',
     requiresApiKey: false,
     isBuiltIn: true,
     description: 'Local inference via WebGPU with open-source models',
+  },
+  'built-in-ai/transformers': {
+    name: 'built-in-ai/transformers',
+    displayName: 'Transformers.js (Local)',
+    requiresApiKey: false,
+    isBuiltIn: true,
+    description: 'Local inference with HuggingFace Transformers.js models',
   },
   'openai': {
     name: 'openai',
@@ -71,8 +71,9 @@ Object.values(SUGGESTED_PROVIDERS).forEach(config => {
   providerRegistry.set(config.name, config);
 });
 
-// Default provider - will auto-select based on availability
-export const DEFAULT_PROVIDER = 'built-in-ai/core';
+// Default provider - null means auto-select based on availability
+// When user hasn't configured a provider, the kernel will try providers in order
+export const DEFAULT_PROVIDER: string | null = null;
 export const DEFAULT_MODEL = 'text';
 
 export function registerProvider(config: ProviderConfig): void {

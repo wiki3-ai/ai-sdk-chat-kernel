@@ -158,7 +158,9 @@ export async function checkProviderSupport(providerName: string): Promise<Provid
 
 /**
  * Auto-select the best available local provider
- * Returns 'built-in-ai/core' if available, else 'built-in-ai/transformers', else 'built-in-ai/webllm' if WebGPU available, else null
+ * Returns 'built-in-ai/core' if available, else 'built-in-ai/webllm' if WebGPU available, else 'built-in-ai/transformers', else null
+ * Note: This only checks if the browser APIs are present, not if initialization will succeed.
+ * Actual initialization may still fail and require fallback.
  */
 export async function autoSelectLocalProvider(): Promise<string | null> {
   const coreSupport = await isBuiltInAICoreSupported();
@@ -167,19 +169,32 @@ export async function autoSelectLocalProvider(): Promise<string | null> {
     return 'built-in-ai/core';
   }
 
-  const transformersSupport = await isTransformersSupported();
-  if (transformersSupport.supported) {
-    console.info('[providers] Auto-selected built-in-ai/transformers (fallback from core)');
-    return 'built-in-ai/transformers';
-  }
-
   const webllmSupport = await isWebLLMSupported();
   if (webllmSupport.supported) {
-    console.info('[providers] Auto-selected built-in-ai/webllm (fallback from transformers)');
+    console.info('[providers] Auto-selected built-in-ai/webllm (fallback from core)');
     return 'built-in-ai/webllm';
   }
 
+  const transformersSupport = await isTransformersSupported();
+  if (transformersSupport.supported) {
+    console.info('[providers] Auto-selected built-in-ai/transformers (fallback from webllm)');
+    return 'built-in-ai/transformers';
+  }
+
   console.warn('[providers] No local provider available');
+  return null;
+}
+
+/**
+ * Get the next fallback provider after a failed provider
+ * Used when initialization fails even though browser support check passed
+ */
+export function getNextFallbackProvider(failedProvider: string): string | null {
+  const fallbackOrder = ['built-in-ai/core', 'built-in-ai/webllm', 'built-in-ai/transformers'];
+  const currentIndex = fallbackOrder.indexOf(failedProvider);
+  if (currentIndex >= 0 && currentIndex < fallbackOrder.length - 1) {
+    return fallbackOrder[currentIndex + 1];
+  }
   return null;
 }
 

@@ -21,8 +21,8 @@
     "defaultProvider": {
       "type": "string",
       "title": "Default Provider",
-      "description": "The AI provider to use. Options: 'built-in-ai/core' (Chrome/Edge Prompt API), 'built-in-ai/transformers' (Transformers.js local inference), 'built-in-ai/webllm' (WebLLM local inference), 'openai', 'anthropic', 'google'. The kernel will auto-fallback from core to transformers to webllm if not available.",
-      "default": "built-in-ai/core"
+      "description": "The AI provider to use. Leave empty for auto-selection. Options: 'built-in-ai/core' (Chrome/Edge Prompt API), 'built-in-ai/webllm' (WebLLM local inference), 'built-in-ai/transformers' (Transformers.js local inference), 'openai', 'anthropic', 'google'. Auto-select will try core → webllm → transformers in order.",
+      "default": ""
     },
     "defaultModel": {
       "type": "string",
