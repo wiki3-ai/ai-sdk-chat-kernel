@@ -12,8 +12,11 @@ import {
   formatModelInfo,
   getAllProviderNames,
   getNextFallbackProvider,
+  releaseWebLLMInstance,
+  getWebLLMPoolStatus,
   type ModelInfo,
-  type ProgressReport
+  type ProgressReport,
+  type ProviderInstance
 } from "./providers.js";
 
 declare const window: any;
@@ -146,6 +149,7 @@ const container = {
          * - Settings (provider, model, apiKey) are stored but session is created lazily
          * - Magic commands can configure the kernel before the first message
          * - Session is only created when actually sending a message
+         * - WebLLM instances are shared globally and reference-counted
          */
         class AIChatKernel {
           // Pending configuration (can be modified by magic commands before session creation)
@@ -158,6 +162,9 @@ const container = {
           private activeModel: string | null = null;
           private languageModel: any | null = null;
           private sessionInitialized: boolean = false;
+          
+          // Track WebLLM model ID for cleanup (shared instances are reference-counted)
+          private activeWebLLMModelId: string | null = null;
           
           // Progress output callback (set by parent kernel)
           private onProgress: ((text: string) => void) | null = null;
@@ -223,6 +230,17 @@ const container = {
           }
 
           /**
+           * Release any shared resources (e.g., WebLLM instance)
+           */
+          private releaseSharedResources(): void {
+            if (this.activeWebLLMModelId) {
+              console.debug(`[AIChatKernel] Releasing WebLLM instance: ${this.activeWebLLMModelId}`);
+              releaseWebLLMInstance(this.activeWebLLMModelId);
+              this.activeWebLLMModelId = null;
+            }
+          }
+
+          /**
            * Try to create a session with a specific provider, returning success/failure
            */
           private async tryCreateSessionWithProvider(
@@ -233,10 +251,22 @@ const container = {
           ): Promise<{ success: boolean; error?: string }> {
             try {
               console.info(`[AIChatKernel] Trying to create session: ${providerName}/${modelName}`);
-              this.languageModel = await createProvider(providerName, modelName, apiKey ?? undefined, progressCallback);
+              
+              // Release any previous shared resources before creating new session
+              this.releaseSharedResources();
+              
+              const result = await createProvider(providerName, modelName, apiKey ?? undefined, progressCallback);
+              this.languageModel = result.model;
               this.activeProvider = providerName;
               this.activeModel = modelName;
               this.sessionInitialized = true;
+              
+              // Track WebLLM model ID for cleanup
+              if (result.webllmModelId) {
+                this.activeWebLLMModelId = result.webllmModelId;
+                console.debug(`[AIChatKernel] Tracking WebLLM instance: ${result.webllmModelId}`);
+              }
+              
               console.info(`[AIChatKernel] Session created successfully: ${providerName}/${modelName}`);
               return { success: true };
             } catch (error: any) {
@@ -342,6 +372,7 @@ const container = {
             this.pendingApiKey = key;
             // Mark session for refresh if it exists
             if (this.sessionInitialized) {
+              this.releaseSharedResources();
               this.sessionInitialized = false;
               this.languageModel = null;
             }
@@ -371,6 +402,7 @@ const container = {
             }
             
             // Mark session for refresh on next send
+            this.releaseSharedResources();
             this.sessionInitialized = false;
             this.languageModel = null;
             
@@ -385,6 +417,7 @@ const container = {
             this.pendingModel = modelName;
             
             // Mark session for refresh on next send
+            this.releaseSharedResources();
             this.sessionInitialized = false;
             this.languageModel = null;
             
@@ -408,6 +441,16 @@ const container = {
               pendingProvider: this.pendingProvider,
               pendingModel: this.pendingModel,
             };
+          }
+
+          /**
+           * Clean up resources when kernel is shutting down
+           */
+          shutdown(): void {
+            console.debug('[AIChatKernel] Shutting down, releasing resources');
+            this.releaseSharedResources();
+            this.languageModel = null;
+            this.sessionInitialized = false;
           }
 
           /**
@@ -518,6 +561,22 @@ const container = {
             // Only process lines starting with %chat
             if (!trimmed.startsWith('%chat')) {
               return null;
+            }
+
+            // %chat pool - show status of shared WebLLM instances
+            if (trimmed === "%chat pool") {
+              const poolStatus = getWebLLMPoolStatus();
+              if (poolStatus.length === 0) {
+                return "No shared WebLLM instances currently loaded.";
+              }
+              
+              let output = "Shared WebLLM Instance Pool:\n";
+              for (const instance of poolStatus) {
+                output += `\n  ${instance.modelId}\n`;
+                output += `    References: ${instance.refCount}\n`;
+                output += `    Last used: ${instance.lastUsed.toLocaleTimeString()}\n`;
+              }
+              return output;
             }
 
             // %chat help
@@ -896,6 +955,8 @@ Note:
               this.abortController.abort();
               this.abortController = null;
             }
+            // Release shared resources (e.g., WebLLM instances)
+            this.chat.shutdown();
             return { status: "ok", restart: false };
           }
           

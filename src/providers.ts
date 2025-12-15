@@ -48,6 +48,166 @@ export function clearProviderCaches(): void {
 }
 
 // ============================================================================
+// Shared WebLLM Engine Pool
+// ============================================================================
+
+/**
+ * Shared WebLLM model instance with reference counting.
+ * Multiple kernels can share the same model to save VRAM and loading time.
+ */
+interface SharedWebLLMInstance {
+  model: LanguageModel;
+  modelId: string;
+  refCount: number;
+  lastUsed: number;
+}
+
+// Global pool of shared WebLLM instances, keyed by model ID
+const webllmInstancePool: Map<string, SharedWebLLMInstance> = new Map();
+
+// Lock to prevent race conditions during model initialization
+const webllmInitLocks: Map<string, Promise<SharedWebLLMInstance>> = new Map();
+
+/**
+ * Get or create a shared WebLLM instance for a model.
+ * If another kernel is currently initializing this model, wait for it.
+ */
+async function getSharedWebLLMInstance(
+  modelId: string,
+  onProgress?: (report: ProgressReport) => void
+): Promise<SharedWebLLMInstance> {
+  // Check if already loaded
+  const existing = webllmInstancePool.get(modelId);
+  if (existing) {
+    existing.refCount++;
+    existing.lastUsed = Date.now();
+    console.info(`[providers] Reusing shared WebLLM instance for ${modelId} (refCount: ${existing.refCount})`);
+    return existing;
+  }
+
+  // Check if initialization is in progress
+  const pendingInit = webllmInitLocks.get(modelId);
+  if (pendingInit) {
+    console.info(`[providers] Waiting for in-progress WebLLM initialization of ${modelId}...`);
+    const instance = await pendingInit;
+    instance.refCount++;
+    instance.lastUsed = Date.now();
+    console.info(`[providers] Reusing WebLLM instance after wait for ${modelId} (refCount: ${instance.refCount})`);
+    return instance;
+  }
+
+  // Start new initialization
+  console.info(`[providers] Initializing new shared WebLLM instance for ${modelId}...`);
+  
+  const initPromise = (async () => {
+    const { webLLM } = await import('@built-in-ai/web-llm');
+    const model = webLLM(modelId);
+
+    // Check availability and potentially download
+    const availability = await model.availability();
+    console.debug(`[providers] ${modelId} availability:`, availability);
+
+    if (availability === 'unavailable') {
+      throw new Error(`Model ${modelId} is unavailable - WebGPU may not be supported`);
+    }
+
+    if (availability === 'downloadable' || availability === 'downloading') {
+      console.info(`[providers] Downloading model ${modelId}...`);
+      if (onProgress) {
+        onProgress({ progress: 0, text: `Downloading ${modelId}...` });
+      }
+      
+      await model.createSessionWithProgress((report: any) => {
+        const progress = typeof report === 'number' ? report : (report?.progress ?? 0);
+        const text = typeof report === 'number' 
+          ? `Downloading: ${Math.round(report * 100)}%`
+          : (report?.text ?? `Downloading: ${Math.round(progress * 100)}%`);
+        
+        if (onProgress) {
+          onProgress({ progress, text });
+        }
+      });
+      
+      if (onProgress) {
+        onProgress({ progress: 1, text: 'Model ready' });
+      }
+    }
+
+    const instance: SharedWebLLMInstance = {
+      model: model as LanguageModel,
+      modelId,
+      refCount: 1,
+      lastUsed: Date.now()
+    };
+    
+    webllmInstancePool.set(modelId, instance);
+    return instance;
+  })();
+
+  // Store the promise so other callers can wait
+  webllmInitLocks.set(modelId, initPromise);
+  
+  try {
+    const instance = await initPromise;
+    return instance;
+  } finally {
+    // Remove the lock once initialization completes (success or failure)
+    webllmInitLocks.delete(modelId);
+  }
+}
+
+/**
+ * Release a shared WebLLM instance.
+ * When refCount reaches 0, the instance is kept cached but can be cleaned up.
+ */
+export function releaseWebLLMInstance(modelId: string): void {
+  const instance = webllmInstancePool.get(modelId);
+  if (!instance) {
+    console.warn(`[providers] Attempted to release unknown WebLLM instance: ${modelId}`);
+    return;
+  }
+
+  instance.refCount--;
+  console.debug(`[providers] Released WebLLM instance ${modelId} (refCount: ${instance.refCount})`);
+  
+  // Don't immediately delete - keep cached for potential reuse
+  // Could add a cleanup timer here if needed
+  if (instance.refCount <= 0) {
+    console.info(`[providers] WebLLM instance ${modelId} has no active users (keeping cached)`);
+  }
+}
+
+/**
+ * Clean up unused WebLLM instances (refCount <= 0).
+ * Call this to free VRAM when models are no longer needed.
+ */
+export function cleanupUnusedWebLLMInstances(): number {
+  let cleaned = 0;
+  for (const [modelId, instance] of webllmInstancePool.entries()) {
+    if (instance.refCount <= 0) {
+      console.info(`[providers] Cleaning up unused WebLLM instance: ${modelId}`);
+      webllmInstancePool.delete(modelId);
+      cleaned++;
+    }
+  }
+  if (cleaned > 0) {
+    console.info(`[providers] Cleaned up ${cleaned} unused WebLLM instance(s)`);
+  }
+  return cleaned;
+}
+
+/**
+ * Get info about shared WebLLM instances (for debugging/status)
+ */
+export function getWebLLMPoolStatus(): { modelId: string; refCount: number; lastUsed: Date }[] {
+  return Array.from(webllmInstancePool.values()).map(instance => ({
+    modelId: instance.modelId,
+    refCount: instance.refCount,
+    lastUsed: new Date(instance.lastUsed)
+  }));
+}
+
+// ============================================================================
 // Provider Support Detection
 // ============================================================================
 
@@ -534,12 +694,14 @@ export async function createTransformersProvider(
 }
 
 /**
- * Create a built-in-ai/webllm provider instance
+ * Create a built-in-ai/webllm provider instance.
+ * Uses shared engine pool to avoid loading the same model multiple times.
+ * Returns the model ID so the caller can release it later.
  */
 export async function createWebLLMProvider(
   modelId: string,
   onProgress?: (report: ProgressReport) => void
-): Promise<LanguageModel> {
+): Promise<{ model: LanguageModel; modelId: string }> {
   console.info(`[providers] Creating built-in-ai/webllm provider with model: ${modelId}`);
   
   const support = await isWebLLMSupported();
@@ -547,40 +709,19 @@ export async function createWebLLMProvider(
     throw new Error(`built-in-ai/webllm not available: ${support.reason}`);
   }
 
-  const { webLLM } = await import('@built-in-ai/web-llm');
-  const model = webLLM(modelId);
+  // Use shared instance pool
+  const instance = await getSharedWebLLMInstance(modelId, onProgress);
+  
+  return { model: instance.model, modelId: instance.modelId };
+}
 
-  // Check availability and potentially download
-  const availability = await model.availability();
-  console.debug(`[providers] ${modelId} availability:`, availability);
-
-  if (availability === 'unavailable') {
-    throw new Error(`Model ${modelId} is unavailable - WebGPU may not be supported`);
-  }
-
-  if (availability === 'downloadable' || availability === 'downloading') {
-    console.info(`[providers] Downloading model ${modelId}...`);
-    if (onProgress) {
-      onProgress({ progress: 0, text: `Downloading ${modelId}...` });
-    }
-    
-    await model.createSessionWithProgress((report: any) => {
-      const progress = typeof report === 'number' ? report : (report?.progress ?? 0);
-      const text = typeof report === 'number' 
-        ? `Downloading: ${Math.round(report * 100)}%`
-        : (report?.text ?? `Downloading: ${Math.round(progress * 100)}%`);
-      
-      if (onProgress) {
-        onProgress({ progress, text });
-      }
-    });
-    
-    if (onProgress) {
-      onProgress({ progress: 1, text: 'Model ready' });
-    }
-  }
-
-  return model as LanguageModel;
+/**
+ * Result from creating a provider, includes cleanup info for shared resources
+ */
+export interface ProviderInstance {
+  model: LanguageModel;
+  // For WebLLM: the model ID to release when done
+  webllmModelId?: string;
 }
 
 /**
@@ -591,36 +732,38 @@ export async function createProvider(
   modelName: string,
   apiKey?: string,
   onProgress?: (report: ProgressReport) => void
-): Promise<LanguageModel> {
+): Promise<ProviderInstance> {
   console.info(`[providers] Creating provider: ${providerName}, model: ${modelName}`);
   
   try {
     switch (providerName) {
       case 'built-in-ai/core':
-        return await createBuiltInAICoreProvider(onProgress);
+        return { model: await createBuiltInAICoreProvider(onProgress) };
 
       case 'built-in-ai/transformers':
-        return await createTransformersProvider(modelName, onProgress);
+        return { model: await createTransformersProvider(modelName, onProgress) };
 
-      case 'built-in-ai/webllm':
-        return await createWebLLMProvider(modelName, onProgress);
+      case 'built-in-ai/webllm': {
+        const result = await createWebLLMProvider(modelName, onProgress);
+        return { model: result.model, webllmModelId: result.modelId };
+      }
 
       case 'openai': {
         const { createOpenAI } = await import('@ai-sdk/openai');
         const provider = createOpenAI({ apiKey: apiKey ?? undefined });
-        return provider.chat(modelName) as LanguageModel;
+        return { model: provider.chat(modelName) as LanguageModel };
       }
 
       case 'anthropic': {
         const { createAnthropic } = await import('@ai-sdk/anthropic');
         const provider = createAnthropic({ apiKey: apiKey ?? undefined });
-        return provider(modelName) as LanguageModel;
+        return { model: provider(modelName) as LanguageModel };
       }
 
       case 'google': {
         const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
         const provider = createGoogleGenerativeAI({ apiKey: apiKey ?? undefined });
-        return provider(modelName) as LanguageModel;
+        return { model: provider(modelName) as LanguageModel };
       }
 
       default:
