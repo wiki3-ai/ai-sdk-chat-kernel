@@ -1389,47 +1389,40 @@ Note:
         };
 
         /**
-         * Progress display UI widget with cancel button
-         * Shown as a modal overlay during long operations
+         * Subtle status bar progress indicator
+         * Shows a small progress indicator in the bottom status bar area
          */
-        class ProgressWidget {
+        class StatusBarProgress {
           private node: HTMLElement;
-          private progressBar: HTMLProgressElement;
-          private messageDiv: HTMLElement;
-          private percentDiv: HTMLElement;
-          private cancelButton: HTMLButtonElement;
+          private spinner: HTMLElement;
+          private messageSpan: HTMLElement;
+          private cancelBtn: HTMLElement;
           private onCancel: (() => void) | null = null;
 
           constructor() {
+            // Create as a proper JupyterLab status bar item
             this.node = document.createElement('div');
-            this.node.className = 'kernel-progress-modal';
+            this.node.className = 'lm-Widget jp-StatusBar-Item ai-status-progress';
             this.node.innerHTML = `
-              <div class="kernel-progress-overlay"></div>
-              <div class="kernel-progress-container">
-                <div class="kernel-progress-header">
-                  <h3>Initializing AI Model</h3>
-                  <button class="kernel-progress-close" aria-label="Cancel">×</button>
-                </div>
-                <div class="kernel-progress-body">
-                  <div class="kernel-progress-message">Starting...</div>
-                  <progress class="kernel-progress-bar" max="100" value="0"></progress>
-                  <div class="kernel-progress-percent">0%</div>
-                </div>
-                <div class="kernel-progress-footer">
-                  <button class="kernel-progress-cancel-btn">Cancel Operation</button>
-                </div>
+              <div class="jp-StatusBar-GroupItem ai-status-content">
+                <span class="ai-status-spinner"></span>
+                <span class="jp-StatusBar-TextItem ai-status-message">Initializing...</span>
+                <button class="ai-status-cancel" title="Cancel">×</button>
               </div>
             `;
 
-            this.progressBar = this.node.querySelector('.kernel-progress-bar')!;
-            this.messageDiv = this.node.querySelector('.kernel-progress-message')!;
-            this.percentDiv = this.node.querySelector('.kernel-progress-percent')!;
-            this.cancelButton = this.node.querySelector('.kernel-progress-cancel-btn')!;
+            this.spinner = this.node.querySelector('.ai-status-spinner')!;
+            this.messageSpan = this.node.querySelector('.ai-status-message')!;
+            this.cancelBtn = this.node.querySelector('.ai-status-cancel')!;
 
-            const closeButton = this.node.querySelector('.kernel-progress-close')!;
-
-            this.cancelButton.addEventListener('click', () => this.handleCancel());
-            closeButton.addEventListener('click', () => this.handleCancel());
+            this.cancelBtn.addEventListener('click', (e) => {
+              e.stopPropagation();
+              if (this.onCancel) {
+                this.messageSpan.textContent = 'Cancelling...';
+                this.cancelBtn.style.display = 'none';
+                this.onCancel();
+              }
+            });
 
             this.addStyles();
             this.hide();
@@ -1439,202 +1432,147 @@ Note:
             this.onCancel = callback;
           }
 
-          private handleCancel(): void {
-            this.cancelButton.disabled = true;
-            this.cancelButton.textContent = 'Cancelling...';
-            if (this.onCancel) {
-              this.onCancel();
-            }
-          }
-
           updateProgress(message: string, percent: number, status: string = 'loading'): void {
-            this.messageDiv.textContent = message;
-
-            if (percent === -1) {
-              this.progressBar.removeAttribute('value');
-              this.percentDiv.textContent = status === 'cancelled' ? 'Cancelled' : 'Error';
-              this.node.classList.toggle('kernel-progress-error', status === 'error');
-              this.node.classList.toggle('kernel-progress-cancelled', status === 'cancelled');
-              this.cancelButton.disabled = true;
-            } else if (percent === 100) {
-              this.progressBar.value = 100;
-              this.percentDiv.textContent = '100%';
-              this.cancelButton.disabled = true;
-              this.node.classList.remove('kernel-progress-error', 'kernel-progress-cancelled');
+            // Truncate long messages
+            const shortMsg = message.length > 40 ? message.substring(0, 37) + '...' : message;
+            
+            if (status === 'complete') {
+              this.messageSpan.textContent = '✓ ' + shortMsg;
+              this.spinner.style.display = 'none';
+              this.cancelBtn.style.display = 'none';
+              this.node.classList.remove('ai-status-error');
+            } else if (status === 'cancelled') {
+              this.messageSpan.textContent = '⊘ Cancelled';
+              this.spinner.style.display = 'none';
+              this.cancelBtn.style.display = 'none';
+              this.node.classList.remove('ai-status-error');
+            } else if (status === 'error') {
+              this.messageSpan.textContent = '✗ ' + shortMsg;
+              this.spinner.style.display = 'none';
+              this.cancelBtn.style.display = 'none';
+              this.node.classList.add('ai-status-error');
             } else {
-              this.progressBar.value = percent;
-              this.percentDiv.textContent = `${Math.round(percent)}%`;
-              this.node.classList.remove('kernel-progress-error', 'kernel-progress-cancelled');
+              // Loading
+              if (percent > 0 && percent < 100) {
+                this.messageSpan.textContent = `${shortMsg} (${Math.round(percent)}%)`;
+              } else {
+                this.messageSpan.textContent = shortMsg;
+              }
+              this.spinner.style.display = 'inline-block';
+              this.cancelBtn.style.display = 'inline-block';
+              this.node.classList.remove('ai-status-error');
             }
           }
 
           show(): void {
-            this.node.style.display = 'flex';
-            this.cancelButton.disabled = false;
-            this.cancelButton.textContent = 'Cancel Operation';
-            this.progressBar.value = 0;
-            this.messageDiv.textContent = 'Starting...';
-            this.percentDiv.textContent = '0%';
-            this.node.classList.remove('kernel-progress-error', 'kernel-progress-cancelled');
+            this.node.style.display = '';
+            this.node.classList.remove('lm-mod-hidden');
+            this.spinner.style.display = 'inline-block';
+            this.cancelBtn.style.display = 'inline-block';
+            this.messageSpan.textContent = 'Initializing...';
+            this.node.classList.remove('ai-status-error');
           }
 
           hide(): void {
             this.node.style.display = 'none';
+            this.node.classList.add('lm-mod-hidden');
           }
 
-          attachTo(parent: HTMLElement = document.body): void {
-            parent.appendChild(this.node);
+          attachTo(): void {
+            // Find the middle section of the JupyterLab status bar (right of kernel status)
+            const statusBarMiddle = document.querySelector('.jp-StatusBar-Middle') ||
+                                    document.querySelector('#jp-main-statusbar .lm-Panel:nth-child(2)');
+            
+            if (statusBarMiddle) {
+              // Insert as first child of the middle status bar section
+              statusBarMiddle.insertBefore(this.node, statusBarMiddle.firstChild);
+              console.log('[StatusBarProgress] Attached to jp-StatusBar-Middle');
+            } else {
+              // Fallback: try the left section
+              const statusBarLeft = document.querySelector('.jp-StatusBar-Left');
+              if (statusBarLeft) {
+                statusBarLeft.appendChild(this.node);
+                console.log('[StatusBarProgress] Attached to jp-StatusBar-Left (fallback)');
+              } else {
+                // Last fallback: fixed position at bottom
+                this.node.classList.add('ai-status-fixed');
+                document.body.appendChild(this.node);
+                console.log('[StatusBarProgress] Using fixed position fallback');
+              }
+            }
           }
 
           private addStyles(): void {
-            if (document.getElementById('kernel-progress-styles')) return;
+            if (document.getElementById('ai-status-progress-styles')) return;
 
             const style = document.createElement('style');
-            style.id = 'kernel-progress-styles';
+            style.id = 'ai-status-progress-styles';
             style.textContent = `
-              .kernel-progress-modal {
-                display: none;
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                z-index: 10000;
-                align-items: center;
-                justify-content: center;
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+              .ai-status-progress.lm-Widget.jp-StatusBar-Item {
+                /* Inherit JupyterLab status bar styling */
               }
-              .kernel-progress-overlay {
-                position: absolute;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: rgba(0, 0, 0, 0.3);
-                z-index: 1;
-              }
-              .kernel-progress-container {
-                position: relative;
-                z-index: 2;
-                background: var(--jp-layout-color1, white);
-                border-radius: 8px;
-                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-                width: 100%;
-                max-width: 500px;
-                overflow: hidden;
-              }
-              .kernel-progress-header {
+              .ai-status-progress .ai-status-content {
                 display: flex;
                 align-items: center;
-                justify-content: space-between;
-                padding: 16px 20px;
-                border-bottom: 1px solid var(--jp-border-color2, #e0e0e0);
+                gap: 4px;
               }
-              .kernel-progress-header h3 {
-                margin: 0;
-                font-size: 16px;
-                font-weight: 600;
-                color: var(--jp-ui-font-color1, #333);
+              .ai-status-progress.lm-mod-hidden {
+                display: none !important;
               }
-              .kernel-progress-close {
+              .ai-status-progress.ai-status-fixed {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                height: 24px;
+                padding: 0 8px;
+                z-index: 1000;
+                background: var(--jp-layout-color2, #eeeeee);
+                border-radius: 0 4px 0 0;
+                border-top: 1px solid var(--jp-border-color2, #e0e0e0);
+                border-right: 1px solid var(--jp-border-color2, #e0e0e0);
+                display: flex;
+                align-items: center;
+              }
+              .ai-status-spinner {
+                display: inline-block;
+                width: 10px;
+                height: 10px;
+                border: 1.5px solid var(--jp-border-color2, #e0e0e0);
+                border-top-color: var(--jp-brand-color1, #2196f3);
+                border-radius: 50%;
+                animation: ai-spin 0.8s linear infinite;
+                flex-shrink: 0;
+              }
+              @keyframes ai-spin {
+                to { transform: rotate(360deg); }
+              }
+              .ai-status-message {
+                max-width: 200px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
+              .ai-status-cancel {
                 background: none;
                 border: none;
-                font-size: 24px;
+                color: var(--jp-ui-font-color2, #757575);
                 cursor: pointer;
-                color: var(--jp-ui-font-color2, #666);
-                padding: 0;
-                width: 32px;
-                height: 32px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                border-radius: 4px;
-                transition: background 0.2s;
-              }
-              .kernel-progress-close:hover {
-                background: var(--jp-layout-color2, #f0f0f0);
-              }
-              .kernel-progress-body {
-                padding: 20px;
-              }
-              .kernel-progress-message {
-                font-size: 14px;
-                color: var(--jp-ui-font-color1, #555);
-                margin-bottom: 12px;
-                min-height: 20px;
-                word-wrap: break-word;
-              }
-              .kernel-progress-bar {
-                width: 100%;
-                height: 8px;
-                border: none;
-                border-radius: 4px;
-                background: var(--jp-layout-color3, #e0e0e0);
-                overflow: hidden;
-              }
-              .kernel-progress-bar::-webkit-progress-bar {
-                background: var(--jp-layout-color3, #e0e0e0);
-                border-radius: 4px;
-              }
-              .kernel-progress-bar::-webkit-progress-value {
-                background: var(--jp-brand-color1, #2196f3);
-                border-radius: 4px;
-                transition: width 0.3s ease;
-              }
-              .kernel-progress-bar::-moz-progress-bar {
-                background: var(--jp-brand-color1, #2196f3);
-                border-radius: 4px;
-              }
-              .kernel-progress-bar:indeterminate {
-                background: linear-gradient(90deg, 
-                  var(--jp-layout-color3, #e0e0e0) 0%, 
-                  var(--jp-brand-color1, #2196f3) 50%, 
-                  var(--jp-layout-color3, #e0e0e0) 100%);
-                background-size: 200% 100%;
-                animation: progress-indeterminate 1.5s linear infinite;
-              }
-              @keyframes progress-indeterminate {
-                0% { background-position: 100% 0; }
-                100% { background-position: -100% 0; }
-              }
-              .kernel-progress-percent {
                 font-size: 12px;
-                color: var(--jp-ui-font-color2, #999);
-                margin-top: 8px;
-                text-align: right;
-              }
-              .kernel-progress-footer {
-                padding: 16px 20px;
-                border-top: 1px solid var(--jp-border-color2, #e0e0e0);
-                text-align: right;
-              }
-              .kernel-progress-cancel-btn {
-                background: var(--jp-error-color1, #f44336);
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-size: 14px;
-                font-weight: 500;
-                transition: background 0.2s;
-              }
-              .kernel-progress-cancel-btn:hover:not(:disabled) {
-                background: var(--jp-error-color2, #d32f2f);
-              }
-              .kernel-progress-cancel-btn:disabled {
+                line-height: 1;
+                padding: 0 2px;
+                border-radius: 2px;
                 opacity: 0.6;
-                cursor: not-allowed;
+                margin-left: 2px;
               }
-              .kernel-progress-error .kernel-progress-bar::-webkit-progress-value,
-              .kernel-progress-error .kernel-progress-bar::-moz-progress-bar {
-                background: var(--jp-error-color1, #d32f2f);
-              }
-              .kernel-progress-error .kernel-progress-message {
+              .ai-status-cancel:hover {
+                opacity: 1;
                 color: var(--jp-error-color1, #d32f2f);
               }
-              .kernel-progress-cancelled .kernel-progress-message {
-                color: var(--jp-warn-color1, #ff9800);
+              .ai-status-error .ai-status-message {
+                color: var(--jp-error-color1, #d32f2f);
+              }
+              .ai-status-error .ai-status-spinner {
+                border-top-color: var(--jp-error-color1, #d32f2f);
               }
             `;
             document.head.appendChild(style);
@@ -1643,7 +1581,7 @@ Note:
 
         /**
          * Progress display extension plugin
-         * Listens for progress comm messages from the kernel and displays a UI
+         * Listens for progress comm messages from the kernel and displays in status bar
          */
         const progressExtensionPlugin = {
           id: "@wiki3-ai/ai-sdk-chat-kernel:progress-ui",
@@ -1652,9 +1590,11 @@ Note:
           activate: async (app: any) => {
             console.log("[ai-sdk-chat-kernel:progress-ui] Activating progress UI extension");
 
-            // Create progress widget
-            const progressWidget = new ProgressWidget();
-            progressWidget.attachTo(document.body);
+            // Create status bar progress indicator
+            const progressWidget = new StatusBarProgress();
+            
+            // Delay attachment to ensure status bar is ready
+            setTimeout(() => progressWidget.attachTo(), 1000);
 
             // Track active comms and their associated kernels
             const activeComms = new Map<string, { kernel: any; commId: string }>();
@@ -1691,7 +1631,7 @@ Note:
                   // Track this comm
                   activeComms.set(commId, { kernel, commId });
                   
-                  // Show progress UI
+                  // Show progress indicator
                   progressWidget.show();
                   
                   // Handle messages
@@ -1706,11 +1646,11 @@ Note:
                         data.status || 'loading'
                       );
                       
-                      // Auto-hide after complete or error
+                      // Auto-hide after complete or error (with short delay)
                       if (data.percent === 100 || data.percent === -1) {
                         setTimeout(() => {
                           progressWidget.hide();
-                        }, 2000);
+                        }, 1500);
                       }
                     }
                   };
