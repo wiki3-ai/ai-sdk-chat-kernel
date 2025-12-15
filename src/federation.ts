@@ -353,11 +353,14 @@ const container = {
             const targetProvider = this.getProviderToUse();
             const targetModel = this.pendingModel; // Only check if explicitly set
             
+            // Check model change first - this should always trigger refresh if model differs
+            if (targetModel && targetModel !== this.activeModel) return true;
+            
             // In auto-select mode, don't refresh if we already have a working session
+            // (but model changes above still apply)
             if (!targetProvider && this.activeProvider) return false;
             
             if (targetProvider && targetProvider !== this.activeProvider) return true;
-            if (targetModel && targetModel !== this.activeModel) return true;
             
             return false;
           }
@@ -455,8 +458,15 @@ const container = {
 
           /**
            * Send a message and stream the response
+           * @param prompt The user's message
+           * @param onChunk Callback for each streamed chunk
+           * @param abortSignal Optional signal to abort the request
            */
-          async send(prompt: string, onChunk?: (chunk: string) => void): Promise<string> {
+          async send(
+            prompt: string, 
+            onChunk?: (chunk: string) => void,
+            abortSignal?: AbortSignal
+          ): Promise<string> {
             // Create or refresh session if needed
             if (this.needsSessionRefresh()) {
               await this.createSession();
@@ -466,6 +476,11 @@ const container = {
               throw new Error("Language model not initialized");
             }
 
+            // Check for abort before starting
+            if (abortSignal?.aborted) {
+              throw new DOMException('Aborted', 'AbortError');
+            }
+
             console.log(
               "[AIChatKernel] Sending prompt to provider:",
               this.activeProvider,
@@ -473,14 +488,21 @@ const container = {
               this.activeModel
             );
 
-            // Use streamText from AI SDK
+            // Use streamText from AI SDK with abort signal
             const result = await streamText({
               model: this.languageModel,
               prompt: prompt,
+              abortSignal: abortSignal,
             });
 
             let fullText = "";
             for await (const textPart of result.textStream) {
+              // Check for abort between chunks
+              if (abortSignal?.aborted) {
+                console.debug('[AIChatKernel] Streaming aborted by user');
+                throw new DOMException('Aborted', 'AbortError');
+              }
+              
               fullText += textPart;
               if (onChunk) {
                 onChunk(textPart);
@@ -814,6 +836,11 @@ Note:
 
           async executeRequest(content: any): Promise<any> {
             const code = String(content.code ?? "");
+            
+            // Create a new abort controller for this request
+            this.abortController = new AbortController();
+            const signal = this.abortController.signal;
+            
             try {
               // Split code into lines and process magic commands
               const lines = code.split('\n');
@@ -847,7 +874,7 @@ Note:
               // If there's non-magic content, send it as a prompt
               const prompt = nonMagicLines.join('\n').trim();
               if (prompt) {
-                // Stream each chunk as it arrives
+                // Stream each chunk as it arrives, passing abort signal
                 await this.chat.send(prompt, (chunk: string) => {
                   // @ts-ignore
                   this.stream(
@@ -855,7 +882,7 @@ Note:
                     // @ts-ignore
                     this.parentHeader
                   );
-                });
+                }, signal);
               } else if (magicResults.length === 0) {
                 // Empty cell - do nothing
               }
@@ -902,6 +929,9 @@ Note:
                 evalue: message,
                 traceback: err?.stack ? [err.stack] : [],
               };
+            } finally {
+              // Clean up abort controller
+              this.abortController = null;
             }
           }
 
