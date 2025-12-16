@@ -835,6 +835,8 @@ const container = {
             });
 
             let fullText = "";
+            let lastToolResult: any = null;
+            let lastToolName: string = "";
             
             // Process the full stream including tool calls and results
             for await (const part of result.fullStream) {
@@ -855,6 +857,7 @@ const container = {
                 // Log tool call - AI SDK 4.x uses 'input' instead of 'args'
                 const args = (part as any).args ?? (part as any).input ?? {};
                 console.debug(`[AIChatKernel] Tool call: ${part.toolName}`, args);
+                lastToolName = part.toolName;
                 if (onChunk) {
                   onChunk(`\n🔧 Calling tool: ${part.toolName}...\n`);
                 }
@@ -863,16 +866,63 @@ const container = {
                 const toolResult = (part as any).result ?? (part as any).output ?? null;
                 const args = (part as any).args ?? (part as any).input ?? {};
                 console.debug(`[AIChatKernel] Tool result from ${part.toolName}:`, toolResult);
+                lastToolResult = toolResult;
+                lastToolName = part.toolName;
                 if (onToolCall) {
                   onToolCall(part.toolName, args, toolResult);
                 }
                 if (onChunk) {
-                  // Show a brief summary of the tool result
-                  const resultStr = typeof toolResult === 'string' 
-                    ? toolResult.substring(0, 200) 
-                    : JSON.stringify(toolResult).substring(0, 200);
                   onChunk(`✓ ${part.toolName} completed\n`);
+                  // Show a preview of the result
+                  if (toolResult && typeof toolResult === 'object') {
+                    if (toolResult.wikitext) {
+                      // For wiki content, show page title and size
+                      onChunk(`📄 Retrieved: "${toolResult.pageTitle}" (${toolResult.wikitext.length} characters)\n\n`);
+                    } else if (toolResult.pageTitle) {
+                      onChunk(`📄 Page: ${toolResult.pageTitle}\n\n`);
+                    }
+                  }
                 }
+              }
+            }
+
+            // If we got a tool result but no text response, the model may not have
+            // continued after tool use. This can happen with some models (like WebLLM).
+            // In that case, provide a helpful summary of what happened.
+            if (lastToolResult && !fullText.trim()) {
+              console.debug("[AIChatKernel] Model didn't generate text after tool use, showing tool result");
+              if (onChunk) {
+                if (lastToolResult.wikitext) {
+                  // For wiki content, show a truncated preview
+                  const preview = lastToolResult.wikitext.substring(0, 2000);
+                  const hasMore = lastToolResult.wikitext.length > 2000;
+                  onChunk(`\n**Wiki Content Preview (${lastToolResult.pageTitle}):**\n\n`);
+                  onChunk("```wikitext\n");
+                  onChunk(preview);
+                  if (hasMore) {
+                    onChunk(`\n\n... [${lastToolResult.wikitext.length - 2000} more characters]\n`);
+                  }
+                  onChunk("```\n");
+                  fullText = `Retrieved wiki content for "${lastToolResult.pageTitle}" (${lastToolResult.wikitext.length} characters)`;
+                } else if (lastToolResult.error) {
+                  onChunk(`\n**Error:** ${lastToolResult.error}\n`);
+                  fullText = `Error: ${lastToolResult.error}`;
+                } else {
+                  // Generic object result
+                  const resultStr = JSON.stringify(lastToolResult, null, 2);
+                  onChunk(`\n**Tool Result:**\n\`\`\`json\n${resultStr.substring(0, 2000)}\n\`\`\`\n`);
+                  fullText = `Tool ${lastToolName} completed`;
+                }
+              }
+            }
+            
+            // Filter out <think> blocks from the output for Qwen models
+            // Qwen uses <think>...</think> for chain-of-thought which shouldn't be shown
+            if (fullText.includes('<think>')) {
+              const thinkRegex = /<think>[\s\S]*?<\/think>/g;
+              const cleanedText = fullText.replace(thinkRegex, '').trim();
+              if (cleanedText) {
+                fullText = cleanedText;
               }
             }
 

@@ -469,60 +469,44 @@ function constructFromUrlPattern(pageUrl: string): WikiSourceUrl {
 
 /**
  * Discover the raw wiki source URL for a given wiki page URL.
- * Tries multiple discovery methods in order:
- * 1. HTML metadata (<link rel="edit">)
- * 2. MediaWiki API discovery
- * 3. URL pattern fallback
+ * Uses MediaWiki API with CORS support (origin=*) to avoid cross-origin issues.
+ * 
+ * For Wikipedia/MediaWiki sites, we use the API directly instead of fetching
+ * the HTML page, which would be blocked by CORS.
  */
 export async function discoverWikiSourceUrl(
   pageUrl: string,
-  followRedirects: boolean = true
+  _followRedirects: boolean = true
 ): Promise<WikiSourceUrl> {
   try {
     console.log(`[wiki-query] Discovering source URL for: ${pageUrl}`);
     
-    const response = await fetch(pageUrl, {
-      redirect: followRedirects ? 'follow' : 'manual',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; WikiQueryJupyterLite/1.0)',
-      },
-    });
-
-    if (!response.ok) {
+    const url = new URL(pageUrl);
+    const baseUrl = `${url.protocol}//${url.hostname}`;
+    
+    // Extract title from URL
+    const title = extractTitleFromUrl(pageUrl);
+    if (!title) {
       return {
         sourceUrl: null,
         canonicalUrl: pageUrl,
         wikiType: "unknown",
         method: "fallback",
         pageTitle: "",
-        error: `HTTP ${response.status}: ${response.statusText}`,
+        error: "Could not extract page title from URL",
       };
     }
-
-    const finalUrl = response.url || pageUrl;
-    const htmlText = await response.text();
-
-    // Parse HTML using DOMParser (browser API)
-    const parser = new DOMParser();
-    const doc = parser.parseFromString(htmlText, 'text/html');
-
-    // Try HTML metadata first
-    const htmlResult = discoverViaHtmlMetadata(doc, finalUrl);
-    if (htmlResult.sourceUrl) {
-      console.log(`[wiki-query] Found via HTML metadata: ${htmlResult.sourceUrl}`);
-      return htmlResult as WikiSourceUrl;
-    }
-
-    // Try API discovery
-    const apiResult = await discoverViaApi(finalUrl);
+    
+    // Try API discovery first (CORS-friendly with origin=*)
+    const apiResult = await discoverViaApi(pageUrl);
     if (apiResult) {
       console.log(`[wiki-query] Found via API: ${apiResult.sourceUrl}`);
       return apiResult;
     }
 
-    // Fallback to URL pattern
-    const fallbackResult = constructFromUrlPattern(finalUrl);
-    console.log(`[wiki-query] Using fallback: ${fallbackResult.sourceUrl}`);
+    // Fallback to URL pattern construction (doesn't require fetch)
+    const fallbackResult = constructFromUrlPattern(pageUrl);
+    console.log(`[wiki-query] Using fallback pattern: ${fallbackResult.sourceUrl}`);
     return fallbackResult;
   } catch (error) {
     console.error('[wiki-query] Discovery error:', error);
@@ -544,10 +528,12 @@ export async function discoverWikiSourceUrl(
 /**
  * Fetch the raw wikitext content from a wiki page.
  * Caches results in localStorage for improved performance.
+ * 
+ * Uses the MediaWiki API with CORS support (origin=*) to fetch content.
  */
 export async function getWikiContent(
   pageUrl: string,
-  followRedirects: boolean = true,
+  _followRedirects: boolean = true,
   useCache: boolean = true,
   cacheTTL: number = 3600
 ): Promise<WikiContent> {
@@ -559,26 +545,70 @@ export async function getWikiContent(
   }
 
   console.log(`[wiki-query] Fetching content for: ${pageUrl}`);
-  const sourceUrlData = await discoverWikiSourceUrl(pageUrl, followRedirects);
-
-  if (!sourceUrlData.sourceUrl) {
-    throw new Error(`Could not discover wiki source URL for: ${pageUrl}${sourceUrlData.error ? ` (${sourceUrlData.error})` : ''}`);
+  
+  // Extract URL components
+  const url = new URL(pageUrl);
+  const baseUrl = `${url.protocol}//${url.hostname}`;
+  const title = extractTitleFromUrl(pageUrl);
+  
+  if (!title) {
+    throw new Error(`Could not extract page title from URL: ${pageUrl}`);
   }
+  
+  // Use MediaWiki API with CORS support to get wikitext
+  // The origin=* parameter enables CORS for cross-origin requests
+  const apiUrl = new URL('/w/api.php', baseUrl);
+  apiUrl.searchParams.set('action', 'query');
+  apiUrl.searchParams.set('titles', title);
+  apiUrl.searchParams.set('prop', 'revisions');
+  apiUrl.searchParams.set('rvprop', 'content');
+  apiUrl.searchParams.set('rvslots', 'main');
+  apiUrl.searchParams.set('format', 'json');
+  apiUrl.searchParams.set('formatversion', '2');
+  apiUrl.searchParams.set('origin', '*'); // CORS support
 
-  const response = await fetch(sourceUrlData.sourceUrl, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; WikiQueryJupyterLite/1.0)' },
+  console.log(`[wiki-query] Fetching via API: ${apiUrl.href}`);
+  
+  const response = await fetch(apiUrl.href, {
+    headers: { 
+      'Accept': 'application/json',
+    },
   });
 
   if (!response.ok) {
     throw new Error(`Failed to fetch wiki content: HTTP ${response.status}`);
   }
 
-  const wikitext = await response.text();
+  const data = await response.json() as Record<string, any>;
+  
+  // Extract wikitext from API response
+  const pages = data?.query?.pages;
+  if (!pages || pages.length === 0) {
+    throw new Error(`No pages found for: ${title}`);
+  }
+  
+  const page = pages[0];
+  if (page.missing) {
+    throw new Error(`Page not found: ${title}`);
+  }
+  
+  const revisions = page.revisions;
+  if (!revisions || revisions.length === 0) {
+    throw new Error(`No revisions found for: ${title}`);
+  }
+  
+  const wikitext = revisions[0]?.slots?.main?.content || revisions[0]?.content || '';
+  if (!wikitext) {
+    throw new Error(`No content found for: ${title}`);
+  }
+  
+  const pageTitle = page.title || title.replace(/_/g, ' ');
+  const canonicalUrl = `${baseUrl}/wiki/${encodeURIComponent(pageTitle.replace(/ /g, '_'))}`;
 
   const content: WikiContent = {
-    pageTitle: sourceUrlData.pageTitle,
-    canonicalUrl: sourceUrlData.canonicalUrl,
-    sourceUrl: sourceUrlData.sourceUrl,
+    pageTitle,
+    canonicalUrl,
+    sourceUrl: apiUrl.href,
     wikitext,
     fetchedAt: new Date().toISOString(),
     contentHash: hashString(wikitext),
@@ -589,7 +619,7 @@ export async function getWikiContent(
     cache.set(cacheKey, content, cacheTTL);
   }
 
-  console.log(`[wiki-query] Fetched ${wikitext.length} characters for: ${sourceUrlData.pageTitle}`);
+  console.log(`[wiki-query] Fetched ${wikitext.length} characters for: ${pageTitle}`);
   return content;
 }
 
