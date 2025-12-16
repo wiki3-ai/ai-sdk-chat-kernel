@@ -319,7 +319,27 @@ const container = {
          * - Magic commands can configure the kernel before the first message
          * - Session is only created when actually sending a message
          * - WebLLM instances are shared globally and reference-counted
+         * - Chat history is maintained for multi-turn conversations
          */
+        
+        // Type for chat messages
+        interface ChatMessage {
+          role: 'user' | 'assistant' | 'system' | 'tool';
+          content: string;
+          toolCallId?: string;
+          toolName?: string;
+          toolResults?: Array<{ name: string; result: any }>;
+        }
+        
+        // Type for chat history configuration
+        interface ChatHistoryConfig {
+          maxMessages: number;  // Maximum number of messages to keep
+          maxTokens: number;  // Approximate max tokens for history
+          enableSummarization: boolean;  // Whether to summarize old messages
+          summarizeAtPercent: number;  // % of limit at which to trigger summarization
+          systemPrompt?: string;  // Optional custom system prompt
+        }
+        
         class AIChatKernel {
           // Pending configuration (can be modified by magic commands before session creation)
           private pendingProvider: string | null = null;
@@ -341,9 +361,124 @@ const container = {
           // MCP Tools registry - maps tool pack names to their tools
           private enabledToolPacks: Set<string> = new Set();
           private toolPacksCache: Map<string, Record<string, any>> = new Map();
+          
+          // Chat history for multi-turn conversations
+          public chatHistory: ChatMessage[] = [];
+          public historyConfig: ChatHistoryConfig = {
+            maxMessages: 20,  // Keep last 20 messages by default
+            maxTokens: 4000,  // ~4000 tokens for history
+            enableSummarization: false,  // TODO: implement summarization
+            summarizeAtPercent: 80,  // Trigger at 80% of limit
+            systemPrompt: undefined,
+          };
+          
+          // System prompt for the chat
+          private systemPrompt: string = `You are a helpful AI assistant. When you use tools, explain what information you retrieved and provide a helpful summary or answer based on the results. Be concise but informative.`;
 
           constructor() {
             console.debug("[AIChatKernel] Created (session creation deferred until first message)");
+          }
+          
+          /**
+           * Configure chat history settings.
+           */
+          setHistoryConfig(config: Partial<ChatHistoryConfig>): void {
+            this.historyConfig = { ...this.historyConfig, ...config };
+            console.debug("[AIChatKernel] History config updated:", this.historyConfig);
+          }
+          
+          /**
+           * Get current history configuration.
+           */
+          getHistoryConfig(): ChatHistoryConfig {
+            return { ...this.historyConfig };
+          }
+          
+          /**
+           * Clear chat history.
+           */
+          clearHistory(): void {
+            this.chatHistory = [];
+            console.debug("[AIChatKernel] Chat history cleared");
+          }
+          
+          /**
+           * Get current chat history.
+           */
+          getHistory(): ChatMessage[] {
+            return [...this.chatHistory];
+          }
+          
+          /**
+           * Add a message to history with automatic pruning.
+           */
+          private addToHistory(message: ChatMessage): void {
+            this.chatHistory.push(message);
+            this.pruneHistory();
+          }
+          
+          /**
+           * Prune history to stay within configured limits.
+           */
+          private pruneHistory(): void {
+            // Keep within message limit (always keep system prompt slot)
+            while (this.chatHistory.length > this.historyConfig.maxMessages) {
+              // Remove oldest non-system message
+              this.chatHistory.shift();
+            }
+            
+            // Estimate tokens and prune if needed
+            let estimatedTokens = this.estimateHistoryTokens();
+            while (estimatedTokens > this.historyConfig.maxTokens && this.chatHistory.length > 2) {
+              this.chatHistory.shift();
+              estimatedTokens = this.estimateHistoryTokens();
+            }
+          }
+          
+          /**
+           * Rough estimate of tokens in history (4 chars ≈ 1 token).
+           */
+          private estimateHistoryTokens(): number {
+            return this.chatHistory.reduce((sum, msg) => sum + Math.ceil(msg.content.length / 4), 0);
+          }
+          
+          /**
+           * Build messages array for AI SDK from history.
+           */
+          private buildMessages(): Array<{ role: string; content: string }> {
+            const messages: Array<{ role: string; content: string }> = [];
+            
+            // Add system prompt (use config's systemPrompt if set)
+            const systemContent = this.historyConfig.systemPrompt || this.systemPrompt;
+            messages.push({ role: 'system', content: systemContent });
+            
+            // Add chat history
+            for (const msg of this.chatHistory) {
+              messages.push({ role: msg.role, content: msg.content });
+            }
+            
+            return messages;
+          }
+          
+          /**
+           * Add a user message to history.
+           */
+          addUserMessage(content: string): void {
+            this.addToHistory({ role: 'user', content });
+          }
+          
+          /**
+           * Add an assistant message to history, optionally with tool results.
+           */
+          addAssistantMessage(content: string, toolResults?: Array<{ name: string; result: any }>): void {
+            this.addToHistory({ role: 'assistant', content, toolResults });
+          }
+          
+          /**
+           * Get messages array formatted for AI SDK streamText.
+           */
+          getHistoryForPrompt(): Array<{ role: string; content: string }> {
+            return this.buildMessages();
           }
 
           /**
@@ -814,22 +949,30 @@ const container = {
               throw new DOMException('Aborted', 'AbortError');
             }
 
+            // Add user message to history
+            this.addUserMessage(prompt);
+
             // Get enabled tools
             const tools = await this.getEnabledTools();
             const hasTools = Object.keys(tools).length > 0;
 
+            // Build messages array from chat history
+            const messages = this.getHistoryForPrompt();
+            
             console.log(
               "[AIChatKernel] Sending prompt to provider:",
               this.activeProvider,
               "model:",
               this.activeModel,
-              hasTools ? `with ${Object.keys(tools).length} tools` : "(no tools)"
+              hasTools ? `with ${Object.keys(tools).length} tools` : "(no tools)",
+              `history: ${messages.length} messages`
             );
 
-            // Use streamText from AI SDK with abort signal and tools
+            // Use streamText from AI SDK with messages array for multi-turn
+            // Cast messages to any to avoid complex AI SDK type issues
             const result = await streamText({
               model: this.languageModel,
-              prompt: prompt,
+              messages: messages as any,
               abortSignal: abortSignal,
               ...(hasTools ? { tools, maxSteps: 5 } : {}),
             });
@@ -925,6 +1068,10 @@ const container = {
                 fullText = cleanedText;
               }
             }
+
+            // Add assistant response to history (with any tool results)
+            const toolResults = lastToolResult ? [{ name: lastToolName, result: lastToolResult }] : undefined;
+            this.addAssistantMessage(fullText, toolResults);
 
             console.debug("[AIChatKernel] Got reply:", fullText.substring(0, 100) + (fullText.length > 100 ? '...' : ''));
             return fullText;
@@ -1098,6 +1245,86 @@ Currently enabled: ${total} tools from ${packs.length} pack(s)`;
               return result.message;
             }
 
+            // %chat clear - clear chat history
+            if (trimmed === "%chat clear") {
+              this.chat.clearHistory();
+              return "Chat history cleared.";
+            }
+
+            // %chat history - show chat history summary
+            if (trimmed === "%chat history") {
+              const history = this.chat.chatHistory;
+              if (history.length === 0) {
+                return "No chat history yet. Start a conversation to build history.";
+              }
+              
+              let output = `Chat History (${history.length} messages):\n\n`;
+              
+              // Show last 10 messages with previews
+              const recentHistory = history.slice(-10);
+              for (const msg of recentHistory) {
+                const roleIcon = msg.role === 'user' ? '👤' : msg.role === 'assistant' ? '🤖' : '🔧';
+                const preview = msg.content.length > 80 ? msg.content.substring(0, 80) + '...' : msg.content;
+                output += `${roleIcon} ${msg.role}: ${preview}\n`;
+                if (msg.toolResults && msg.toolResults.length > 0) {
+                  output += `   └─ Tool results: ${msg.toolResults.map(t => t.name).join(', ')}\n`;
+                }
+              }
+              
+              if (history.length > 10) {
+                output += `\n... and ${history.length - 10} earlier messages\n`;
+              }
+              
+              output += `\nUse "%chat clear" to clear history.`;
+              output += `\nUse "%chat history config" to see configuration.`;
+              return output;
+            }
+
+            // %chat history config - show or set history configuration
+            if (trimmed === "%chat history config") {
+              const config = this.chat.historyConfig;
+              return `Chat History Configuration:
+
+  maxMessages: ${config.maxMessages}          - Maximum messages to keep in history
+  maxTokens: ${config.maxTokens}            - Approximate token limit for history
+  enableSummarization: ${config.enableSummarization}  - Summarize old messages when limit reached
+  summarizeAtPercent: ${config.summarizeAtPercent}      - Trigger summarization at this % of limit
+  systemPrompt: ${config.systemPrompt ? '"' + config.systemPrompt.substring(0, 50) + '..."' : '(none)'}
+
+Current history: ${this.chat.chatHistory.length} messages
+
+Set options with: %chat history config <option>=<value>
+Example: %chat history config maxMessages=100`;
+            }
+
+            // %chat history config <option>=<value>
+            const historyConfigMatch = trimmed.match(/^%chat\s+history\s+config\s+(\w+)=(.+)$/);
+            if (historyConfigMatch) {
+              const option = historyConfigMatch[1];
+              const value = historyConfigMatch[2];
+              
+              const config = this.chat.historyConfig;
+              switch (option) {
+                case 'maxMessages':
+                  config.maxMessages = parseInt(value, 10);
+                  return `Set maxMessages to ${config.maxMessages}`;
+                case 'maxTokens':
+                  config.maxTokens = parseInt(value, 10);
+                  return `Set maxTokens to ${config.maxTokens}`;
+                case 'enableSummarization':
+                  config.enableSummarization = value === 'true';
+                  return `Set enableSummarization to ${config.enableSummarization}`;
+                case 'summarizeAtPercent':
+                  config.summarizeAtPercent = parseInt(value, 10);
+                  return `Set summarizeAtPercent to ${config.summarizeAtPercent}`;
+                case 'systemPrompt':
+                  config.systemPrompt = value;
+                  return `Set systemPrompt to "${value}"`;
+                default:
+                  return `Unknown option: ${option}\n\nAvailable options: maxMessages, maxTokens, enableSummarization, summarizeAtPercent, systemPrompt`;
+              }
+            }
+
             // %chat help
             if (trimmed === "%chat" || trimmed === "%chat help") {
               const providerNames = getAllProviderNames();
@@ -1117,6 +1344,10 @@ Currently enabled: ${total} tools from ${packs.length} pack(s)`;
   %chat list <provider> --low-resource      - Show only low-resource models
   %chat mcp                       - MCP tool management (enable wiki-query, etc.)
   %chat mcp enable <pack>         - Enable an MCP tool pack
+  %chat history                   - Show chat history summary
+  %chat history config            - Show history configuration
+  %chat history config <option>=<value>  - Set history option
+  %chat clear                     - Clear chat history
   %chat status                    - Show current configuration
   %chat help                      - Show this help message
 
@@ -1127,6 +1358,8 @@ Examples:
   %chat mcp enable wiki-query     (enables Wikipedia fetching tools)
   %chat provider openai --key     (prompts securely for key)
   %chat model gpt-4o-mini
+  %chat history config maxMessages=100
+  %chat clear
 
 Note: 
 - 'built-in-ai/core' uses Chrome/Edge Built-in AI (Gemini Nano/Phi-4 Mini)
