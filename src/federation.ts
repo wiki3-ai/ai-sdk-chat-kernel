@@ -319,7 +319,27 @@ const container = {
          * - Magic commands can configure the kernel before the first message
          * - Session is only created when actually sending a message
          * - WebLLM instances are shared globally and reference-counted
+         * - Chat history is maintained for multi-turn conversations
          */
+        
+        // Type for chat messages
+        interface ChatMessage {
+          role: 'user' | 'assistant' | 'system' | 'tool';
+          content: string;
+          toolCallId?: string;
+          toolName?: string;
+          toolResults?: Array<{ name: string; result: any }>;
+        }
+        
+        // Type for chat history configuration
+        interface ChatHistoryConfig {
+          maxMessages: number;  // Maximum number of messages to keep
+          maxTokens: number;  // Approximate max tokens for history
+          enableSummarization: boolean;  // Whether to summarize old messages
+          summarizeAtPercent: number;  // % of limit at which to trigger summarization
+          systemPrompt?: string;  // Optional custom system prompt
+        }
+        
         class AIChatKernel {
           // Pending configuration (can be modified by magic commands before session creation)
           private pendingProvider: string | null = null;
@@ -338,8 +358,244 @@ const container = {
           // Progress output callback (set by parent kernel)
           private onProgress: ((text: string) => void) | null = null;
 
+          // MCP Tools registry - maps tool pack names to their tools
+          private enabledToolPacks: Set<string> = new Set();
+          private toolPacksCache: Map<string, Record<string, any>> = new Map();
+          
+          // Chat history for multi-turn conversations
+          public chatHistory: ChatMessage[] = [];
+          public historyConfig: ChatHistoryConfig = {
+            maxMessages: 20,  // Keep last 20 messages by default
+            maxTokens: 4000,  // ~4000 tokens for history
+            enableSummarization: false,  // TODO: implement summarization
+            summarizeAtPercent: 80,  // Trigger at 80% of limit
+            systemPrompt: undefined,
+          };
+          
+          // System prompt for the chat
+          private systemPrompt: string = `You are a helpful AI assistant. When you use tools, explain what information you retrieved and provide a helpful summary or answer based on the results. Be concise but informative.`;
+
           constructor() {
             console.debug("[AIChatKernel] Created (session creation deferred until first message)");
+          }
+          
+          /**
+           * Configure chat history settings.
+           */
+          setHistoryConfig(config: Partial<ChatHistoryConfig>): void {
+            this.historyConfig = { ...this.historyConfig, ...config };
+            console.debug("[AIChatKernel] History config updated:", this.historyConfig);
+          }
+          
+          /**
+           * Get current history configuration.
+           */
+          getHistoryConfig(): ChatHistoryConfig {
+            return { ...this.historyConfig };
+          }
+          
+          /**
+           * Clear chat history.
+           */
+          clearHistory(): void {
+            this.chatHistory = [];
+            console.debug("[AIChatKernel] Chat history cleared");
+          }
+          
+          /**
+           * Get current chat history.
+           */
+          getHistory(): ChatMessage[] {
+            return [...this.chatHistory];
+          }
+          
+          /**
+           * Add a message to history with automatic pruning.
+           */
+          private addToHistory(message: ChatMessage): void {
+            this.chatHistory.push(message);
+            this.pruneHistory();
+          }
+          
+          /**
+           * Prune history to stay within configured limits.
+           */
+          private pruneHistory(): void {
+            // Keep within message limit (always keep system prompt slot)
+            while (this.chatHistory.length > this.historyConfig.maxMessages) {
+              // Remove oldest non-system message
+              this.chatHistory.shift();
+            }
+            
+            // Estimate tokens and prune if needed
+            let estimatedTokens = this.estimateHistoryTokens();
+            while (estimatedTokens > this.historyConfig.maxTokens && this.chatHistory.length > 2) {
+              this.chatHistory.shift();
+              estimatedTokens = this.estimateHistoryTokens();
+            }
+          }
+          
+          /**
+           * Rough estimate of tokens in history (4 chars ≈ 1 token).
+           */
+          private estimateHistoryTokens(): number {
+            return this.chatHistory.reduce((sum, msg) => sum + Math.ceil(msg.content.length / 4), 0);
+          }
+          
+          /**
+           * Build messages array for AI SDK from history.
+           */
+          private buildMessages(): Array<{ role: string; content: string }> {
+            const messages: Array<{ role: string; content: string }> = [];
+            
+            // Add system prompt (use config's systemPrompt if set)
+            const systemContent = this.historyConfig.systemPrompt || this.systemPrompt;
+            messages.push({ role: 'system', content: systemContent });
+            
+            // Add chat history
+            for (const msg of this.chatHistory) {
+              messages.push({ role: msg.role, content: msg.content });
+            }
+            
+            return messages;
+          }
+          
+          /**
+           * Add a user message to history.
+           */
+          addUserMessage(content: string): void {
+            this.addToHistory({ role: 'user', content });
+          }
+          
+          /**
+           * Add an assistant message to history, optionally with tool results.
+           */
+          addAssistantMessage(content: string, toolResults?: Array<{ name: string; result: any }>): void {
+            this.addToHistory({ role: 'assistant', content, toolResults });
+          }
+          
+          /**
+           * Get messages array formatted for AI SDK streamText.
+           */
+          getHistoryForPrompt(): Array<{ role: string; content: string }> {
+            return this.buildMessages();
+          }
+
+          /**
+           * Enable an MCP tool pack by name.
+           * Returns info about the enabled tools.
+           */
+          async enableToolPack(packName: string): Promise<{ enabled: boolean; tools: string[]; message: string }> {
+            if (packName === 'wiki-query') {
+              if (this.enabledToolPacks.has(packName)) {
+                const tools = await this.getToolPackTools(packName);
+                return {
+                  enabled: true,
+                  tools: Object.keys(tools),
+                  message: `Tool pack '${packName}' is already enabled.`
+                };
+              }
+              
+              // Lazy load the wiki-query tools
+              const wikiModule = await import('./mcp-tools/wiki-query.js');
+              const tools = wikiModule.getWikiQueryTools();
+              this.toolPacksCache.set(packName, tools);
+              this.enabledToolPacks.add(packName);
+              
+              console.info(`[AIChatKernel] Enabled tool pack: ${packName}`);
+              return {
+                enabled: true,
+                tools: Object.keys(tools),
+                message: `Enabled tool pack '${packName}' with ${Object.keys(tools).length} tools: ${Object.keys(tools).join(', ')}`
+              };
+            }
+            
+            return {
+              enabled: false,
+              tools: [],
+              message: `Unknown tool pack: ${packName}. Available packs: wiki-query`
+            };
+          }
+
+          /**
+           * Disable an MCP tool pack.
+           */
+          disableToolPack(packName: string): { disabled: boolean; message: string } {
+            if (this.enabledToolPacks.has(packName)) {
+              this.enabledToolPacks.delete(packName);
+              this.toolPacksCache.delete(packName);
+              console.info(`[AIChatKernel] Disabled tool pack: ${packName}`);
+              return {
+                disabled: true,
+                message: `Disabled tool pack '${packName}'.`
+              };
+            }
+            return {
+              disabled: false,
+              message: `Tool pack '${packName}' is not enabled.`
+            };
+          }
+
+          /**
+           * Get tools for a specific pack.
+           */
+          private async getToolPackTools(packName: string): Promise<Record<string, any>> {
+            if (this.toolPacksCache.has(packName)) {
+              return this.toolPacksCache.get(packName)!;
+            }
+            
+            // Load if not cached
+            if (packName === 'wiki-query') {
+              const wikiModule = await import('./mcp-tools/wiki-query.js');
+              const tools = wikiModule.getWikiQueryTools();
+              this.toolPacksCache.set(packName, tools);
+              return tools;
+            }
+            
+            return {};
+          }
+
+          /**
+           * Get all enabled tools as a combined record for use with streamText.
+           */
+          async getEnabledTools(): Promise<Record<string, any>> {
+            const allTools: Record<string, any> = {};
+            
+            for (const packName of this.enabledToolPacks) {
+              const packTools = await this.getToolPackTools(packName);
+              Object.assign(allTools, packTools);
+            }
+            
+            return allTools;
+          }
+
+          /**
+           * List all enabled tool packs and their tools.
+           */
+          async listEnabledTools(): Promise<{ packs: Array<{ name: string; tools: string[] }>; total: number }> {
+            const packs: Array<{ name: string; tools: string[] }> = [];
+            let total = 0;
+            
+            for (const packName of this.enabledToolPacks) {
+              const tools = await this.getToolPackTools(packName);
+              const toolNames = Object.keys(tools);
+              packs.push({ name: packName, tools: toolNames });
+              total += toolNames.length;
+            }
+            
+            return { packs, total };
+          }
+
+          /**
+           * Get available tool packs (not necessarily enabled).
+           */
+          getAvailableToolPacks(): Array<{ name: string; description: string }> {
+            return [
+              {
+                name: 'wiki-query',
+                description: 'Tools for fetching and analyzing Wikipedia/MediaWiki content'
+              }
+            ];
           }
           
           /**
@@ -670,12 +926,14 @@ const container = {
            * @param onChunk Callback for each streamed chunk
            * @param abortSignal Optional signal to abort the request
            * @param progressComm Optional progress comm manager for UI updates
+           * @param onToolCall Optional callback when a tool is called
            */
           async send(
             prompt: string, 
             onChunk?: (chunk: string) => void,
             abortSignal?: AbortSignal,
-            progressComm?: ProgressCommManager
+            progressComm?: ProgressCommManager,
+            onToolCall?: (toolName: string, args: any, result: any) => void
           ): Promise<string> {
             // Create or refresh session if needed (with progress reporting)
             if (this.needsSessionRefresh()) {
@@ -691,33 +949,148 @@ const container = {
               throw new DOMException('Aborted', 'AbortError');
             }
 
+            // Add user message to history
+            this.addUserMessage(prompt);
+
+            // Get enabled tools
+            const tools = await this.getEnabledTools();
+            const hasTools = Object.keys(tools).length > 0;
+
+            // Build messages array from chat history
+            const messages = this.getHistoryForPrompt();
+            
             console.log(
               "[AIChatKernel] Sending prompt to provider:",
               this.activeProvider,
               "model:",
-              this.activeModel
+              this.activeModel,
+              hasTools ? `with ${Object.keys(tools).length} tools` : "(no tools)",
+              `history: ${messages.length} messages`
             );
 
-            // Use streamText from AI SDK with abort signal
+            // Use streamText from AI SDK with messages array for multi-turn
+            // Cast messages to any to avoid complex AI SDK type issues
             const result = await streamText({
               model: this.languageModel,
-              prompt: prompt,
+              messages: messages as any,
               abortSignal: abortSignal,
+              ...(hasTools ? { tools, maxSteps: 5 } : {}),
             });
 
             let fullText = "";
-            for await (const textPart of result.textStream) {
+            let lastToolResult: any = null;
+            let lastToolName: string = "";
+            
+            // Process the full stream including tool calls and results
+            for await (const part of result.fullStream) {
               // Check for abort between chunks
               if (abortSignal?.aborted) {
                 console.debug('[AIChatKernel] Streaming aborted by user');
                 throw new DOMException('Aborted', 'AbortError');
               }
-              
-              fullText += textPart;
-              if (onChunk) {
-                onChunk(textPart);
+
+              if (part.type === 'text-delta') {
+                // AI SDK 4.x uses 'text' instead of 'textDelta'
+                const textDelta = (part as any).textDelta ?? (part as any).text ?? '';
+                fullText += textDelta;
+                if (onChunk && textDelta) {
+                  onChunk(textDelta);
+                }
+              } else if (part.type === 'tool-call') {
+                // Log tool call - AI SDK 4.x uses 'input' instead of 'args'
+                const args = (part as any).args ?? (part as any).input ?? {};
+                console.debug(`[AIChatKernel] Tool call: ${part.toolName}`, args);
+                lastToolName = part.toolName;
+                if (onChunk) {
+                  onChunk(`\n🔧 Calling tool: ${part.toolName}...\n`);
+                }
+              } else if (part.type === 'tool-result') {
+                // Log tool result - AI SDK 4.x uses 'output' instead of 'result'
+                const toolResult = (part as any).result ?? (part as any).output ?? null;
+                const args = (part as any).args ?? (part as any).input ?? {};
+                console.debug(`[AIChatKernel] Tool result from ${part.toolName}:`, toolResult);
+                lastToolResult = toolResult;
+                lastToolName = part.toolName;
+                if (onToolCall) {
+                  onToolCall(part.toolName, args, toolResult);
+                }
+                if (onChunk) {
+                  onChunk(`✓ ${part.toolName} completed\n`);
+                  // Show a preview of the result
+                  if (toolResult && typeof toolResult === 'object') {
+                    if (toolResult.wikitext) {
+                      // For wiki content, show page title and size
+                      onChunk(`📄 Retrieved: "${toolResult.pageTitle}" (${toolResult.wikitext.length} characters)\n\n`);
+                    } else if (toolResult.pageTitle) {
+                      onChunk(`📄 Page: ${toolResult.pageTitle}\n\n`);
+                    }
+                  }
+                }
               }
             }
+
+            // Filter out <think> blocks from the output for Qwen models FIRST
+            // Qwen uses <think>...</think> for chain-of-thought which shouldn't be shown
+            if (fullText.includes('<think>')) {
+              const thinkRegex = /<think>[\s\S]*?<\/think>/g;
+              fullText = fullText.replace(thinkRegex, '').trim();
+            }
+
+            // If we got a tool result but no text response (or only think blocks),
+            // the model may not have continued after tool use. This happens with WebLLM.
+            // Provide a helpful summary of the tool result.
+            if (lastToolResult && !fullText.trim()) {
+              console.debug("[AIChatKernel] Model didn't generate text after tool use, showing tool result");
+              if (onChunk) {
+                if (lastToolResult.wikitext) {
+                  // For wiki content (get_content), show a truncated preview
+                  const preview = lastToolResult.wikitext.substring(0, 2000);
+                  const hasMore = lastToolResult.wikitext.length > 2000;
+                  onChunk(`\n**Wiki Content Preview (${lastToolResult.pageTitle}):**\n\n`);
+                  onChunk("```wikitext\n");
+                  onChunk(preview);
+                  if (hasMore) {
+                    onChunk(`\n\n... [${lastToolResult.wikitext.length - 2000} more characters]\n`);
+                  }
+                  onChunk("```\n");
+                  fullText = `Retrieved wiki content for "${lastToolResult.pageTitle}" (${lastToolResult.wikitext.length} characters)`;
+                } else if (lastToolResult.wordCount !== undefined || lastToolResult.characterCount !== undefined) {
+                  // For get_content_stats, show the statistics
+                  onChunk(`\n**Content Statistics for "${lastToolResult.pageTitle}":**\n\n`);
+                  onChunk(`- **Characters:** ${lastToolResult.characterCount?.toLocaleString() || 'N/A'}\n`);
+                  onChunk(`- **Words:** ${lastToolResult.wordCount?.toLocaleString() || 'N/A'}\n`);
+                  onChunk(`- **Sections:** ${lastToolResult.sectionCount || 'N/A'}\n`);
+                  if (lastToolResult.sections && lastToolResult.sections.length > 0) {
+                    onChunk(`\n**Sections:**\n`);
+                    for (const section of lastToolResult.sections.slice(0, 15)) {
+                      onChunk(`- ${section}\n`);
+                    }
+                    if (lastToolResult.sections.length > 15) {
+                      onChunk(`- ... and ${lastToolResult.sections.length - 15} more sections\n`);
+                    }
+                  }
+                  onChunk('\n');
+                  fullText = `Content stats for "${lastToolResult.pageTitle}": ${lastToolResult.wordCount?.toLocaleString()} words, ${lastToolResult.sectionCount} sections`;
+                } else if (lastToolResult.error) {
+                  onChunk(`\n**Error:** ${lastToolResult.error}\n`);
+                  fullText = `Error: ${lastToolResult.error}`;
+                } else if (lastToolResult.pageTitle) {
+                  // Generic result with pageTitle
+                  const resultStr = JSON.stringify(lastToolResult, null, 2);
+                  onChunk(`\n**Result for "${lastToolResult.pageTitle}":**\n\`\`\`json\n${resultStr.substring(0, 2000)}\n\`\`\`\n`);
+                  fullText = `Retrieved data for "${lastToolResult.pageTitle}"`;
+                } else {
+                  // Completely generic object result
+                  const resultStr = JSON.stringify(lastToolResult, null, 2);
+                  onChunk(`\n**Tool Result:**\n\`\`\`json\n${resultStr.substring(0, 2000)}\n\`\`\`\n`);
+                  fullText = `Tool ${lastToolName} completed`;
+                }
+              }
+            }
+
+            // Add assistant response to history (with any tool results)
+            const toolResults = lastToolResult ? [{ name: lastToolName, result: lastToolResult }] : undefined;
+            this.addAssistantMessage(fullText, toolResults);
 
             console.debug("[AIChatKernel] Got reply:", fullText.substring(0, 100) + (fullText.length > 100 ? '...' : ''));
             return fullText;
@@ -814,6 +1187,163 @@ const container = {
               return output;
             }
 
+            // %chat mcp - MCP tool management
+            if (trimmed === "%chat mcp" || trimmed === "%chat mcp help") {
+              const available = this.chat.getAvailableToolPacks();
+              const { packs, total } = await this.chat.listEnabledTools();
+              
+              let output = `MCP Tool Management:
+
+  %chat mcp                       - Show this help and current status
+  %chat mcp list                  - List available tool packs
+  %chat mcp enable <pack>         - Enable a tool pack
+  %chat mcp disable <pack>        - Disable a tool pack
+  %chat mcp status                - Show enabled tools
+
+Available tool packs:
+${available.map(p => `  • ${p.name} - ${p.description}`).join('\n')}
+
+Currently enabled: ${total} tools from ${packs.length} pack(s)`;
+              
+              if (packs.length > 0) {
+                output += '\n' + packs.map(p => `  • ${p.name}: ${p.tools.join(', ')}`).join('\n');
+              }
+              
+              return output;
+            }
+
+            // %chat mcp list - list available tool packs
+            if (trimmed === "%chat mcp list") {
+              const available = this.chat.getAvailableToolPacks();
+              const { packs } = await this.chat.listEnabledTools();
+              const enabledNames = packs.map(p => p.name);
+              
+              let output = "Available MCP Tool Packs:\n\n";
+              for (const pack of available) {
+                const status = enabledNames.includes(pack.name) ? '✓ enabled' : '○ disabled';
+                output += `  ${pack.name} (${status})\n`;
+                output += `    ${pack.description}\n\n`;
+              }
+              output += `Use "%chat mcp enable <pack>" to enable a tool pack.`;
+              return output;
+            }
+
+            // %chat mcp status - show enabled tools
+            if (trimmed === "%chat mcp status") {
+              const { packs, total } = await this.chat.listEnabledTools();
+              
+              if (packs.length === 0) {
+                return "No MCP tool packs are currently enabled.\n\nUse \"%chat mcp list\" to see available packs.";
+              }
+              
+              let output = `Enabled MCP Tools (${total} total):\n\n`;
+              for (const pack of packs) {
+                output += `${pack.name}:\n`;
+                for (const tool of pack.tools) {
+                  output += `  • ${tool}\n`;
+                }
+                output += '\n';
+              }
+              output += `The AI can now use these tools to help answer your questions.`;
+              return output;
+            }
+
+            // %chat mcp enable <pack>
+            const mcpEnableMatch = trimmed.match(/^%chat\s+mcp\s+enable\s+(\S+)$/);
+            if (mcpEnableMatch) {
+              const packName = mcpEnableMatch[1];
+              const result = await this.chat.enableToolPack(packName);
+              return result.message;
+            }
+
+            // %chat mcp disable <pack>
+            const mcpDisableMatch = trimmed.match(/^%chat\s+mcp\s+disable\s+(\S+)$/);
+            if (mcpDisableMatch) {
+              const packName = mcpDisableMatch[1];
+              const result = this.chat.disableToolPack(packName);
+              return result.message;
+            }
+
+            // %chat clear - clear chat history
+            if (trimmed === "%chat clear") {
+              this.chat.clearHistory();
+              return "Chat history cleared.";
+            }
+
+            // %chat history - show chat history summary
+            if (trimmed === "%chat history") {
+              const history = this.chat.chatHistory;
+              if (history.length === 0) {
+                return "No chat history yet. Start a conversation to build history.";
+              }
+              
+              let output = `Chat History (${history.length} messages):\n\n`;
+              
+              // Show last 10 messages with previews
+              const recentHistory = history.slice(-10);
+              for (const msg of recentHistory) {
+                const roleIcon = msg.role === 'user' ? '👤' : msg.role === 'assistant' ? '🤖' : '🔧';
+                const preview = msg.content.length > 80 ? msg.content.substring(0, 80) + '...' : msg.content;
+                output += `${roleIcon} ${msg.role}: ${preview}\n`;
+                if (msg.toolResults && msg.toolResults.length > 0) {
+                  output += `   └─ Tool results: ${msg.toolResults.map(t => t.name).join(', ')}\n`;
+                }
+              }
+              
+              if (history.length > 10) {
+                output += `\n... and ${history.length - 10} earlier messages\n`;
+              }
+              
+              output += `\nUse "%chat clear" to clear history.`;
+              output += `\nUse "%chat history config" to see configuration.`;
+              return output;
+            }
+
+            // %chat history config - show or set history configuration
+            if (trimmed === "%chat history config") {
+              const config = this.chat.historyConfig;
+              return `Chat History Configuration:
+
+  maxMessages: ${config.maxMessages}          - Maximum messages to keep in history
+  maxTokens: ${config.maxTokens}            - Approximate token limit for history
+  enableSummarization: ${config.enableSummarization}  - Summarize old messages when limit reached
+  summarizeAtPercent: ${config.summarizeAtPercent}      - Trigger summarization at this % of limit
+  systemPrompt: ${config.systemPrompt ? '"' + config.systemPrompt.substring(0, 50) + '..."' : '(none)'}
+
+Current history: ${this.chat.chatHistory.length} messages
+
+Set options with: %chat history config <option>=<value>
+Example: %chat history config maxMessages=100`;
+            }
+
+            // %chat history config <option>=<value>
+            const historyConfigMatch = trimmed.match(/^%chat\s+history\s+config\s+(\w+)=(.+)$/);
+            if (historyConfigMatch) {
+              const option = historyConfigMatch[1];
+              const value = historyConfigMatch[2];
+              
+              const config = this.chat.historyConfig;
+              switch (option) {
+                case 'maxMessages':
+                  config.maxMessages = parseInt(value, 10);
+                  return `Set maxMessages to ${config.maxMessages}`;
+                case 'maxTokens':
+                  config.maxTokens = parseInt(value, 10);
+                  return `Set maxTokens to ${config.maxTokens}`;
+                case 'enableSummarization':
+                  config.enableSummarization = value === 'true';
+                  return `Set enableSummarization to ${config.enableSummarization}`;
+                case 'summarizeAtPercent':
+                  config.summarizeAtPercent = parseInt(value, 10);
+                  return `Set summarizeAtPercent to ${config.summarizeAtPercent}`;
+                case 'systemPrompt':
+                  config.systemPrompt = value;
+                  return `Set systemPrompt to "${value}"`;
+                default:
+                  return `Unknown option: ${option}\n\nAvailable options: maxMessages, maxTokens, enableSummarization, summarizeAtPercent, systemPrompt`;
+              }
+            }
+
             // %chat help
             if (trimmed === "%chat" || trimmed === "%chat help") {
               const providerNames = getAllProviderNames();
@@ -831,6 +1361,12 @@ const container = {
   %chat list <provider>           - List models for a provider
   %chat list <provider> --filter <pattern>  - Filter models by name pattern
   %chat list <provider> --low-resource      - Show only low-resource models
+  %chat mcp                       - MCP tool management (enable wiki-query, etc.)
+  %chat mcp enable <pack>         - Enable an MCP tool pack
+  %chat history                   - Show chat history summary
+  %chat history config            - Show history configuration
+  %chat history config <option>=<value>  - Set history option
+  %chat clear                     - Clear chat history
   %chat status                    - Show current configuration
   %chat help                      - Show this help message
 
@@ -838,13 +1374,16 @@ Examples:
   %chat provider built-in-ai/core
   %chat provider built-in-ai/webllm
   %chat list built-in-ai/webllm --filter llama
-  %chat list built-in-ai/webllm --low-resource
+  %chat mcp enable wiki-query     (enables Wikipedia fetching tools)
   %chat provider openai --key     (prompts securely for key)
   %chat model gpt-4o-mini
+  %chat history config maxMessages=100
+  %chat clear
 
 Note: 
 - 'built-in-ai/core' uses Chrome/Edge Built-in AI (Gemini Nano/Phi-4 Mini)
 - 'built-in-ai/webllm' uses WebLLM for local inference via WebGPU
+- Use '%chat mcp enable wiki-query' to let the AI fetch Wikipedia content
 - API keys can be set in Settings > AI SDK Chat Kernel
 - Use '%chat key' or '--key' to enter keys via secure dialog`;
             }
@@ -1067,7 +1606,7 @@ Note:
               for (const line of lines) {
                 const trimmed = line.trim();
                 if (trimmed.startsWith('%chat')) {
-                  // Process magic command
+                  // Process %chat magic command
                   const result = await this.processSingleMagic(line);
                   if (result !== null) {
                     magicResults.push(result);

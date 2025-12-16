@@ -1,6 +1,6 @@
 {
   "name": "@wiki3-ai/ai-sdk-chat-kernel",
-  "version": "0.3.3",
+  "version": "0.4.0.dev4",
   "description": "AI SDK chat kernel for JupyterLite using Vercel AI SDK",
   "type": "module",
   "main": "dist/index.js",
@@ -16,7 +16,14 @@
     "build": "npm run sync-version && npm run build:labextension",
     "build:prod": "npm run sync-version && npm run build:labextension && npm run copy:labextension",
     "copy:labextension": "mkdir -p labextension && cp -r dist/* labextension/ && cp install.json labextension/ && mkdir -p labextension/schemas/@wiki3-ai/ai-sdk-chat-kernel && cp schema/plugin.json labextension/schemas/@wiki3-ai/ai-sdk-chat-kernel/",
-    "clean": "rm -rf lib dist labextension"
+    "clean": "rm -rf lib dist labextension",
+    "test": "npm run test:unit",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "test:integration": "playwright test",
+    "test:integration:ui": "playwright test --ui",
+    "test:integration:headed": "playwright test --headed",
+    "test:all": "npm run test:unit && npm run test:integration"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^2.0.53",
@@ -30,12 +37,16 @@
     "@jupyterlab/services": "^7.5.0",
     "@jupyterlite/kernel": "^0.6.4",
     "@mlc-ai/web-llm": "^0.2.80",
-    "ai": "^5.0.0"
+    "ai": "^5.0.0",
+    "zod": "^4.2.1"
   },
   "devDependencies": {
+    "@jupyterlab/galata": "^5.5.1",
+    "@playwright/test": "^1.57.0",
     "@types/node": "^20.0.0",
     "esbuild": "^0.20.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.15"
   },
   "jupyterlab": {
     "extension": true,
