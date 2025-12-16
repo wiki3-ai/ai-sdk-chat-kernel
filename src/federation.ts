@@ -1029,14 +1029,21 @@ const container = {
               }
             }
 
-            // If we got a tool result but no text response, the model may not have
-            // continued after tool use. This can happen with some models (like WebLLM).
-            // In that case, provide a helpful summary of what happened.
+            // Filter out <think> blocks from the output for Qwen models FIRST
+            // Qwen uses <think>...</think> for chain-of-thought which shouldn't be shown
+            if (fullText.includes('<think>')) {
+              const thinkRegex = /<think>[\s\S]*?<\/think>/g;
+              fullText = fullText.replace(thinkRegex, '').trim();
+            }
+
+            // If we got a tool result but no text response (or only think blocks),
+            // the model may not have continued after tool use. This happens with WebLLM.
+            // Provide a helpful summary of the tool result.
             if (lastToolResult && !fullText.trim()) {
               console.debug("[AIChatKernel] Model didn't generate text after tool use, showing tool result");
               if (onChunk) {
                 if (lastToolResult.wikitext) {
-                  // For wiki content, show a truncated preview
+                  // For wiki content (get_content), show a truncated preview
                   const preview = lastToolResult.wikitext.substring(0, 2000);
                   const hasMore = lastToolResult.wikitext.length > 2000;
                   onChunk(`\n**Wiki Content Preview (${lastToolResult.pageTitle}):**\n\n`);
@@ -1047,25 +1054,37 @@ const container = {
                   }
                   onChunk("```\n");
                   fullText = `Retrieved wiki content for "${lastToolResult.pageTitle}" (${lastToolResult.wikitext.length} characters)`;
+                } else if (lastToolResult.wordCount !== undefined || lastToolResult.characterCount !== undefined) {
+                  // For get_content_stats, show the statistics
+                  onChunk(`\n**Content Statistics for "${lastToolResult.pageTitle}":**\n\n`);
+                  onChunk(`- **Characters:** ${lastToolResult.characterCount?.toLocaleString() || 'N/A'}\n`);
+                  onChunk(`- **Words:** ${lastToolResult.wordCount?.toLocaleString() || 'N/A'}\n`);
+                  onChunk(`- **Sections:** ${lastToolResult.sectionCount || 'N/A'}\n`);
+                  if (lastToolResult.sections && lastToolResult.sections.length > 0) {
+                    onChunk(`\n**Sections:**\n`);
+                    for (const section of lastToolResult.sections.slice(0, 15)) {
+                      onChunk(`- ${section}\n`);
+                    }
+                    if (lastToolResult.sections.length > 15) {
+                      onChunk(`- ... and ${lastToolResult.sections.length - 15} more sections\n`);
+                    }
+                  }
+                  onChunk('\n');
+                  fullText = `Content stats for "${lastToolResult.pageTitle}": ${lastToolResult.wordCount?.toLocaleString()} words, ${lastToolResult.sectionCount} sections`;
                 } else if (lastToolResult.error) {
                   onChunk(`\n**Error:** ${lastToolResult.error}\n`);
                   fullText = `Error: ${lastToolResult.error}`;
+                } else if (lastToolResult.pageTitle) {
+                  // Generic result with pageTitle
+                  const resultStr = JSON.stringify(lastToolResult, null, 2);
+                  onChunk(`\n**Result for "${lastToolResult.pageTitle}":**\n\`\`\`json\n${resultStr.substring(0, 2000)}\n\`\`\`\n`);
+                  fullText = `Retrieved data for "${lastToolResult.pageTitle}"`;
                 } else {
-                  // Generic object result
+                  // Completely generic object result
                   const resultStr = JSON.stringify(lastToolResult, null, 2);
                   onChunk(`\n**Tool Result:**\n\`\`\`json\n${resultStr.substring(0, 2000)}\n\`\`\`\n`);
                   fullText = `Tool ${lastToolName} completed`;
                 }
-              }
-            }
-            
-            // Filter out <think> blocks from the output for Qwen models
-            // Qwen uses <think>...</think> for chain-of-thought which shouldn't be shown
-            if (fullText.includes('<think>')) {
-              const thinkRegex = /<think>[\s\S]*?<\/think>/g;
-              const cleanedText = fullText.replace(thinkRegex, '').trim();
-              if (cleanedText) {
-                fullText = cleanedText;
               }
             }
 
