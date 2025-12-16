@@ -1,6 +1,6 @@
 {
   "name": "@wiki3-ai/ai-sdk-chat-kernel",
-  "version": "0.3.3",
+  "version": "0.4.0.dev1",
   "description": "AI SDK chat kernel for JupyterLite using Vercel AI SDK",
   "type": "module",
   "main": "dist/index.js",
@@ -30,7 +30,8 @@
     "@jupyterlab/services": "^7.5.0",
     "@jupyterlite/kernel": "^0.6.4",
     "@mlc-ai/web-llm": "^0.2.80",
-    "ai": "^5.0.0"
+    "ai": "^5.0.0",
+    "zod": "^4.2.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

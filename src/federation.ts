@@ -338,8 +338,129 @@ const container = {
           // Progress output callback (set by parent kernel)
           private onProgress: ((text: string) => void) | null = null;
 
+          // MCP Tools registry - maps tool pack names to their tools
+          private enabledToolPacks: Set<string> = new Set();
+          private toolPacksCache: Map<string, Record<string, any>> = new Map();
+
           constructor() {
             console.debug("[AIChatKernel] Created (session creation deferred until first message)");
+          }
+
+          /**
+           * Enable an MCP tool pack by name.
+           * Returns info about the enabled tools.
+           */
+          async enableToolPack(packName: string): Promise<{ enabled: boolean; tools: string[]; message: string }> {
+            if (packName === 'wiki-query') {
+              if (this.enabledToolPacks.has(packName)) {
+                const tools = await this.getToolPackTools(packName);
+                return {
+                  enabled: true,
+                  tools: Object.keys(tools),
+                  message: `Tool pack '${packName}' is already enabled.`
+                };
+              }
+              
+              // Lazy load the wiki-query tools
+              const wikiModule = await import('./mcp-tools/wiki-query.js');
+              const tools = wikiModule.getWikiQueryTools();
+              this.toolPacksCache.set(packName, tools);
+              this.enabledToolPacks.add(packName);
+              
+              console.info(`[AIChatKernel] Enabled tool pack: ${packName}`);
+              return {
+                enabled: true,
+                tools: Object.keys(tools),
+                message: `Enabled tool pack '${packName}' with ${Object.keys(tools).length} tools: ${Object.keys(tools).join(', ')}`
+              };
+            }
+            
+            return {
+              enabled: false,
+              tools: [],
+              message: `Unknown tool pack: ${packName}. Available packs: wiki-query`
+            };
+          }
+
+          /**
+           * Disable an MCP tool pack.
+           */
+          disableToolPack(packName: string): { disabled: boolean; message: string } {
+            if (this.enabledToolPacks.has(packName)) {
+              this.enabledToolPacks.delete(packName);
+              this.toolPacksCache.delete(packName);
+              console.info(`[AIChatKernel] Disabled tool pack: ${packName}`);
+              return {
+                disabled: true,
+                message: `Disabled tool pack '${packName}'.`
+              };
+            }
+            return {
+              disabled: false,
+              message: `Tool pack '${packName}' is not enabled.`
+            };
+          }
+
+          /**
+           * Get tools for a specific pack.
+           */
+          private async getToolPackTools(packName: string): Promise<Record<string, any>> {
+            if (this.toolPacksCache.has(packName)) {
+              return this.toolPacksCache.get(packName)!;
+            }
+            
+            // Load if not cached
+            if (packName === 'wiki-query') {
+              const wikiModule = await import('./mcp-tools/wiki-query.js');
+              const tools = wikiModule.getWikiQueryTools();
+              this.toolPacksCache.set(packName, tools);
+              return tools;
+            }
+            
+            return {};
+          }
+
+          /**
+           * Get all enabled tools as a combined record for use with streamText.
+           */
+          async getEnabledTools(): Promise<Record<string, any>> {
+            const allTools: Record<string, any> = {};
+            
+            for (const packName of this.enabledToolPacks) {
+              const packTools = await this.getToolPackTools(packName);
+              Object.assign(allTools, packTools);
+            }
+            
+            return allTools;
+          }
+
+          /**
+           * List all enabled tool packs and their tools.
+           */
+          async listEnabledTools(): Promise<{ packs: Array<{ name: string; tools: string[] }>; total: number }> {
+            const packs: Array<{ name: string; tools: string[] }> = [];
+            let total = 0;
+            
+            for (const packName of this.enabledToolPacks) {
+              const tools = await this.getToolPackTools(packName);
+              const toolNames = Object.keys(tools);
+              packs.push({ name: packName, tools: toolNames });
+              total += toolNames.length;
+            }
+            
+            return { packs, total };
+          }
+
+          /**
+           * Get available tool packs (not necessarily enabled).
+           */
+          getAvailableToolPacks(): Array<{ name: string; description: string }> {
+            return [
+              {
+                name: 'wiki-query',
+                description: 'Tools for fetching and analyzing Wikipedia/MediaWiki content'
+              }
+            ];
           }
           
           /**
@@ -670,12 +791,14 @@ const container = {
            * @param onChunk Callback for each streamed chunk
            * @param abortSignal Optional signal to abort the request
            * @param progressComm Optional progress comm manager for UI updates
+           * @param onToolCall Optional callback when a tool is called
            */
           async send(
             prompt: string, 
             onChunk?: (chunk: string) => void,
             abortSignal?: AbortSignal,
-            progressComm?: ProgressCommManager
+            progressComm?: ProgressCommManager,
+            onToolCall?: (toolName: string, args: any, result: any) => void
           ): Promise<string> {
             // Create or refresh session if needed (with progress reporting)
             if (this.needsSessionRefresh()) {
@@ -691,31 +814,65 @@ const container = {
               throw new DOMException('Aborted', 'AbortError');
             }
 
+            // Get enabled tools
+            const tools = await this.getEnabledTools();
+            const hasTools = Object.keys(tools).length > 0;
+
             console.log(
               "[AIChatKernel] Sending prompt to provider:",
               this.activeProvider,
               "model:",
-              this.activeModel
+              this.activeModel,
+              hasTools ? `with ${Object.keys(tools).length} tools` : "(no tools)"
             );
 
-            // Use streamText from AI SDK with abort signal
+            // Use streamText from AI SDK with abort signal and tools
             const result = await streamText({
               model: this.languageModel,
               prompt: prompt,
               abortSignal: abortSignal,
+              ...(hasTools ? { tools, maxSteps: 5 } : {}),
             });
 
             let fullText = "";
-            for await (const textPart of result.textStream) {
+            
+            // Process the full stream including tool calls and results
+            for await (const part of result.fullStream) {
               // Check for abort between chunks
               if (abortSignal?.aborted) {
                 console.debug('[AIChatKernel] Streaming aborted by user');
                 throw new DOMException('Aborted', 'AbortError');
               }
-              
-              fullText += textPart;
-              if (onChunk) {
-                onChunk(textPart);
+
+              if (part.type === 'text-delta') {
+                // AI SDK 4.x uses 'text' instead of 'textDelta'
+                const textDelta = (part as any).textDelta ?? (part as any).text ?? '';
+                fullText += textDelta;
+                if (onChunk && textDelta) {
+                  onChunk(textDelta);
+                }
+              } else if (part.type === 'tool-call') {
+                // Log tool call - AI SDK 4.x uses 'input' instead of 'args'
+                const args = (part as any).args ?? (part as any).input ?? {};
+                console.debug(`[AIChatKernel] Tool call: ${part.toolName}`, args);
+                if (onChunk) {
+                  onChunk(`\n🔧 Calling tool: ${part.toolName}...\n`);
+                }
+              } else if (part.type === 'tool-result') {
+                // Log tool result - AI SDK 4.x uses 'output' instead of 'result'
+                const toolResult = (part as any).result ?? (part as any).output ?? null;
+                const args = (part as any).args ?? (part as any).input ?? {};
+                console.debug(`[AIChatKernel] Tool result from ${part.toolName}:`, toolResult);
+                if (onToolCall) {
+                  onToolCall(part.toolName, args, toolResult);
+                }
+                if (onChunk) {
+                  // Show a brief summary of the tool result
+                  const resultStr = typeof toolResult === 'string' 
+                    ? toolResult.substring(0, 200) 
+                    : JSON.stringify(toolResult).substring(0, 200);
+                  onChunk(`✓ ${part.toolName} completed\n`);
+                }
               }
             }
 
@@ -814,6 +971,83 @@ const container = {
               return output;
             }
 
+            // %chat mcp - MCP tool management
+            if (trimmed === "%chat mcp" || trimmed === "%chat mcp help") {
+              const available = this.chat.getAvailableToolPacks();
+              const { packs, total } = await this.chat.listEnabledTools();
+              
+              let output = `MCP Tool Management:
+
+  %chat mcp                       - Show this help and current status
+  %chat mcp list                  - List available tool packs
+  %chat mcp enable <pack>         - Enable a tool pack
+  %chat mcp disable <pack>        - Disable a tool pack
+  %chat mcp status                - Show enabled tools
+
+Available tool packs:
+${available.map(p => `  • ${p.name} - ${p.description}`).join('\n')}
+
+Currently enabled: ${total} tools from ${packs.length} pack(s)`;
+              
+              if (packs.length > 0) {
+                output += '\n' + packs.map(p => `  • ${p.name}: ${p.tools.join(', ')}`).join('\n');
+              }
+              
+              return output;
+            }
+
+            // %chat mcp list - list available tool packs
+            if (trimmed === "%chat mcp list") {
+              const available = this.chat.getAvailableToolPacks();
+              const { packs } = await this.chat.listEnabledTools();
+              const enabledNames = packs.map(p => p.name);
+              
+              let output = "Available MCP Tool Packs:\n\n";
+              for (const pack of available) {
+                const status = enabledNames.includes(pack.name) ? '✓ enabled' : '○ disabled';
+                output += `  ${pack.name} (${status})\n`;
+                output += `    ${pack.description}\n\n`;
+              }
+              output += `Use "%chat mcp enable <pack>" to enable a tool pack.`;
+              return output;
+            }
+
+            // %chat mcp status - show enabled tools
+            if (trimmed === "%chat mcp status") {
+              const { packs, total } = await this.chat.listEnabledTools();
+              
+              if (packs.length === 0) {
+                return "No MCP tool packs are currently enabled.\n\nUse \"%chat mcp list\" to see available packs.";
+              }
+              
+              let output = `Enabled MCP Tools (${total} total):\n\n`;
+              for (const pack of packs) {
+                output += `${pack.name}:\n`;
+                for (const tool of pack.tools) {
+                  output += `  • ${tool}\n`;
+                }
+                output += '\n';
+              }
+              output += `The AI can now use these tools to help answer your questions.`;
+              return output;
+            }
+
+            // %chat mcp enable <pack>
+            const mcpEnableMatch = trimmed.match(/^%chat\s+mcp\s+enable\s+(\S+)$/);
+            if (mcpEnableMatch) {
+              const packName = mcpEnableMatch[1];
+              const result = await this.chat.enableToolPack(packName);
+              return result.message;
+            }
+
+            // %chat mcp disable <pack>
+            const mcpDisableMatch = trimmed.match(/^%chat\s+mcp\s+disable\s+(\S+)$/);
+            if (mcpDisableMatch) {
+              const packName = mcpDisableMatch[1];
+              const result = this.chat.disableToolPack(packName);
+              return result.message;
+            }
+
             // %chat help
             if (trimmed === "%chat" || trimmed === "%chat help") {
               const providerNames = getAllProviderNames();
@@ -831,6 +1065,8 @@ const container = {
   %chat list <provider>           - List models for a provider
   %chat list <provider> --filter <pattern>  - Filter models by name pattern
   %chat list <provider> --low-resource      - Show only low-resource models
+  %chat mcp                       - MCP tool management (enable wiki-query, etc.)
+  %chat mcp enable <pack>         - Enable an MCP tool pack
   %chat status                    - Show current configuration
   %chat help                      - Show this help message
 
@@ -838,13 +1074,14 @@ Examples:
   %chat provider built-in-ai/core
   %chat provider built-in-ai/webllm
   %chat list built-in-ai/webllm --filter llama
-  %chat list built-in-ai/webllm --low-resource
+  %chat mcp enable wiki-query     (enables Wikipedia fetching tools)
   %chat provider openai --key     (prompts securely for key)
   %chat model gpt-4o-mini
 
 Note: 
 - 'built-in-ai/core' uses Chrome/Edge Built-in AI (Gemini Nano/Phi-4 Mini)
 - 'built-in-ai/webllm' uses WebLLM for local inference via WebGPU
+- Use '%chat mcp enable wiki-query' to let the AI fetch Wikipedia content
 - API keys can be set in Settings > AI SDK Chat Kernel
 - Use '%chat key' or '--key' to enter keys via secure dialog`;
             }
@@ -1067,7 +1304,7 @@ Note:
               for (const line of lines) {
                 const trimmed = line.trim();
                 if (trimmed.startsWith('%chat')) {
-                  // Process magic command
+                  // Process %chat magic command
                   const result = await this.processSingleMagic(line);
                   if (result !== null) {
                     magicResults.push(result);
