@@ -1,7 +1,7 @@
 // src/federation.ts
 // Module Federation container for JupyterLite with AI SDK support
 
-import { streamText, type LanguageModel } from 'ai';
+import { streamText, stepCountIs, type LanguageModel } from 'ai';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, type ProviderConfig } from "./models.js";
 import { 
   createProvider, 
@@ -970,16 +970,20 @@ const container = {
 
             // Use streamText from AI SDK with messages array for multi-turn
             // Cast messages to any to avoid complex AI SDK type issues
+            // Use stopWhen: stepCountIs(5) for AI SDK v5 multi-step tool calling
             const result = await streamText({
               model: this.languageModel,
               messages: messages as any,
               abortSignal: abortSignal,
-              ...(hasTools ? { tools, maxSteps: 5 } : {}),
+              ...(hasTools ? { tools, stopWhen: stepCountIs(5) } : {}),
             });
 
             let fullText = "";
             let lastToolResult: any = null;
             let lastToolName: string = "";
+            let preToolText = "";  // Text generated before tool call
+            let postToolText = ""; // Text generated after tool result
+            let sawToolResult = false;
             
             // Process the full stream including tool calls and results
             for await (const part of result.fullStream) {
@@ -993,6 +997,12 @@ const container = {
                 // AI SDK 4.x uses 'text' instead of 'textDelta'
                 const textDelta = (part as any).textDelta ?? (part as any).text ?? '';
                 fullText += textDelta;
+                // Track pre vs post tool text
+                if (sawToolResult) {
+                  postToolText += textDelta;
+                } else {
+                  preToolText += textDelta;
+                }
                 if (onChunk && textDelta) {
                   onChunk(textDelta);
                 }
@@ -1011,6 +1021,7 @@ const container = {
                 console.debug(`[AIChatKernel] Tool result from ${part.toolName}:`, toolResult);
                 lastToolResult = toolResult;
                 lastToolName = part.toolName;
+                sawToolResult = true;
                 if (onToolCall) {
                   onToolCall(part.toolName, args, toolResult);
                 }
@@ -1034,12 +1045,13 @@ const container = {
             if (fullText.includes('<think>')) {
               const thinkRegex = /<think>[\s\S]*?<\/think>/g;
               fullText = fullText.replace(thinkRegex, '').trim();
+              postToolText = postToolText.replace(thinkRegex, '').trim();
             }
 
-            // If we got a tool result but no text response (or only think blocks),
-            // the model may not have continued after tool use. This happens with WebLLM.
-            // Provide a helpful summary of the tool result.
-            if (lastToolResult && !fullText.trim()) {
+            // If we got a tool result but no meaningful post-tool response,
+            // the model didn't continue after tool use. This happens with WebLLM.
+            // Display the tool result directly.
+            if (lastToolResult && !postToolText.trim()) {
               console.debug("[AIChatKernel] Model didn't generate text after tool use, showing tool result");
               if (onChunk) {
                 if (lastToolResult.wikitext) {
