@@ -1,7 +1,7 @@
 // src/federation.ts
 // Module Federation container for JupyterLite with AI SDK support
 
-import { streamText, type LanguageModel } from 'ai';
+import { streamText, stepCountIs, type LanguageModel } from 'ai';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, getProviderConfig, getAllProviders, type ProviderConfig } from "./models.js";
 import { 
   createProvider, 
@@ -816,17 +816,31 @@ const container = {
               hasTools ? `with ${Object.keys(tools).length} tools` : "(no tools)"
             );
 
+            // Truncate large tool results to avoid overflowing browser model context windows.
+            // Returns a serialized summary string of at most maxChars characters.
+            const summarizeToolResult = (toolResult: any, maxChars: number = 4000): string => {
+              if (!toolResult) return '';
+              if (typeof toolResult === 'string') return toolResult.substring(0, maxChars);
+              // Wiki content: extract key fields, truncate wikitext
+              if (toolResult.wikitext) {
+                const text = toolResult.wikitext.substring(0, maxChars);
+                return `Page: ${toolResult.pageTitle || 'Unknown'}\n\n${text}${toolResult.wikitext.length > maxChars ? '\n\n[content truncated]' : ''}`;
+              }
+              // Structured result: JSON with truncation
+              const json = JSON.stringify(toolResult, null, 2);
+              return json.substring(0, maxChars) + (json.length > maxChars ? '\n...[truncated]' : '');
+            };
+
             // Use streamText from AI SDK with abort signal
             const result = await streamText({
               model: this.languageModel,
               prompt: prompt,
               abortSignal: abortSignal,
-              ...(hasTools ? { tools, maxSteps: 5 } : {}),
+              ...(hasTools ? { tools, stopWhen: stepCountIs(5) } : {}),
             });
 
             let fullText = "";
-            let lastToolResult: any = null;
-            let lastToolName: string = "";
+            const toolResults: Array<{ name: string; args: any; result: any }> = [];
 
             // Process the full stream including tool calls and results
             for await (const part of result.fullStream) {
@@ -845,7 +859,6 @@ const container = {
               } else if (part.type === 'tool-call') {
                 const args = (part as any).args ?? (part as any).input ?? {};
                 console.debug(`[AIChatKernel] Tool call: ${part.toolName}`, args);
-                lastToolName = part.toolName;
                 if (onChunk) {
                   onChunk(`\n🔧 Calling tool: ${part.toolName}...\n`);
                 }
@@ -853,8 +866,7 @@ const container = {
                 const toolResult = (part as any).result ?? (part as any).output ?? null;
                 const args = (part as any).args ?? (part as any).input ?? {};
                 console.debug(`[AIChatKernel] Tool result from ${part.toolName}:`, toolResult);
-                lastToolResult = toolResult;
-                lastToolName = part.toolName;
+                toolResults.push({ name: part.toolName, args, result: toolResult });
                 if (onToolCall) {
                   onToolCall(part.toolName, args, toolResult);
                 }
@@ -877,49 +889,48 @@ const container = {
               fullText = fullText.replace(thinkRegex, '').trim();
             }
 
-            // If we got a tool result but no text response, show the tool result
-            if (lastToolResult && !fullText.trim()) {
-              console.debug("[AIChatKernel] Model didn't generate text after tool use, showing tool result");
+            // If tools fired but the model didn't generate a synthesis, re-prompt
+            // with the tool results in a plain-text follow-up (no tools to prevent loops).
+            // Browser models often can't handle multi-step tool messages natively.
+            if (toolResults.length > 0 && !fullText.trim()) {
+              console.debug(`[AIChatKernel] Model produced no text after ${toolResults.length} tool call(s), sending follow-up prompt`);
+
+              // Build a follow-up prompt with truncated tool results
+              const resultSections = toolResults.map(tr => {
+                const summary = summarizeToolResult(tr.result);
+                return `--- Tool: ${tr.name} ---\n${summary}`;
+              }).join('\n\n');
+
+              const followUp = `The user asked: ${prompt}\n\nI used tools and got these results:\n\n${resultSections}\n\nBased on these results, provide a helpful answer to the user's question.`;
+
               if (onChunk) {
-                if (lastToolResult.wikitext) {
-                  const preview = lastToolResult.wikitext.substring(0, 2000);
-                  const hasMore = lastToolResult.wikitext.length > 2000;
-                  onChunk(`\n**Wiki Content Preview (${lastToolResult.pageTitle}):**\n\n`);
-                  onChunk("```wikitext\n");
-                  onChunk(preview);
-                  if (hasMore) {
-                    onChunk(`\n\n... [${lastToolResult.wikitext.length - 2000} more characters]\n`);
-                  }
-                  onChunk("```\n");
-                  fullText = `Retrieved wiki content for "${lastToolResult.pageTitle}" (${lastToolResult.wikitext.length} characters)`;
-                } else if (lastToolResult.wordCount !== undefined || lastToolResult.characterCount !== undefined) {
-                  onChunk(`\n**Content Statistics for "${lastToolResult.pageTitle}":**\n\n`);
-                  onChunk(`- **Characters:** ${lastToolResult.characterCount?.toLocaleString() || 'N/A'}\n`);
-                  onChunk(`- **Words:** ${lastToolResult.wordCount?.toLocaleString() || 'N/A'}\n`);
-                  onChunk(`- **Sections:** ${lastToolResult.sectionCount || 'N/A'}\n`);
-                  if (lastToolResult.sections && lastToolResult.sections.length > 0) {
-                    onChunk(`\n**Sections:**\n`);
-                    for (const section of lastToolResult.sections.slice(0, 15)) {
-                      onChunk(`- ${section}\n`);
-                    }
-                    if (lastToolResult.sections.length > 15) {
-                      onChunk(`- ... and ${lastToolResult.sections.length - 15} more sections\n`);
-                    }
-                  }
-                  onChunk('\n');
-                  fullText = `Content stats for "${lastToolResult.pageTitle}": ${lastToolResult.wordCount?.toLocaleString()} words, ${lastToolResult.sectionCount} sections`;
-                } else if (lastToolResult.error) {
-                  onChunk(`\n**Error:** ${lastToolResult.error}\n`);
-                  fullText = `Error: ${lastToolResult.error}`;
-                } else if (lastToolResult.pageTitle) {
-                  const resultStr = JSON.stringify(lastToolResult, null, 2);
-                  onChunk(`\n**Result for "${lastToolResult.pageTitle}":**\n\`\`\`json\n${resultStr.substring(0, 2000)}\n\`\`\`\n`);
-                  fullText = `Retrieved data for "${lastToolResult.pageTitle}"`;
-                } else {
-                  const resultStr = JSON.stringify(lastToolResult, null, 2);
-                  onChunk(`\n**Tool Result:**\n\`\`\`json\n${resultStr.substring(0, 2000)}\n\`\`\`\n`);
-                  fullText = `Tool ${lastToolName} completed`;
+                onChunk('📝 Synthesizing answer...\n\n');
+              }
+
+              const synthesis = await streamText({
+                model: this.languageModel,
+                prompt: followUp,
+                abortSignal: abortSignal,
+                // No tools — plain text generation only
+              });
+
+              for await (const part of synthesis.fullStream) {
+                if (abortSignal?.aborted) {
+                  throw new DOMException('Aborted', 'AbortError');
                 }
+                if (part.type === 'text-delta') {
+                  const textDelta = (part as any).textDelta ?? (part as any).text ?? '';
+                  fullText += textDelta;
+                  if (onChunk && textDelta) {
+                    onChunk(textDelta);
+                  }
+                }
+              }
+
+              // Filter think blocks from follow-up too
+              if (fullText.includes('<think>')) {
+                const thinkRegex = /<think>[\s\S]*?<\/think>/g;
+                fullText = fullText.replace(thinkRegex, '').trim();
               }
             }
 

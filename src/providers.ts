@@ -219,8 +219,8 @@ export async function isBuiltInAICoreSupported(): Promise<ProviderSupport> {
   if (cached) return cached;
 
   try {
-    const { doesBrowserSupportBuiltInAI } = await import('@browser-ai/core');
-    const supported = doesBrowserSupportBuiltInAI();
+    const { doesBrowserSupportBrowserAI } = await import('@browser-ai/core');
+    const supported = doesBrowserSupportBrowserAI();
     const result: ProviderSupport = {
       supported,
       reason: supported ? undefined : 'Chrome/Edge Browser AI not available. Enable in chrome://flags or edge://flags'
@@ -560,8 +560,8 @@ export async function getModelAvailability(
   try {
     switch (providerName) {
       case 'browser-ai/core': {
-        const { builtInAI } = await import('@browser-ai/core');
-        const model = builtInAI();
+        const { browserAI } = await import('@browser-ai/core');
+        const model = browserAI();
         const status = await model.availability();
         return { status: status as ModelAvailability['status'] };
       }
@@ -612,8 +612,8 @@ export async function createBuiltInAICoreProvider(
     throw new Error(`browser-ai/core not available: ${support.reason}`);
   }
 
-  const { builtInAI } = await import('@browser-ai/core');
-  const model = builtInAI();
+  const { browserAI } = await import('@browser-ai/core');
+  const model = browserAI();
 
   // Check availability and potentially download
   const availability = await model.availability();

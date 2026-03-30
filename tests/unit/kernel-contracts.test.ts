@@ -78,7 +78,7 @@ describe('AIChatKernel class contracts', () => {
     it('should pass tools to streamText when enabled', () => {
       // The send() method should conditionally pass tools
       expect(federationTs).toContain('hasTools');
-      expect(federationTs).toContain('tools, maxSteps');
+      expect(federationTs).toContain('tools, stopWhen');
     });
 
     it('should handle tool-call stream parts', () => {
