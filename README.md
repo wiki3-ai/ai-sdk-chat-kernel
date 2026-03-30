@@ -17,10 +17,10 @@ pip install -e .
 ## Features
 
 - **Separated Local AI Providers**: 
-  - `built-in-ai/core` - Chrome/Edge Prompt API (Gemini Nano, Phi-4 Mini)
-  - `built-in-ai/webllm` - WebLLM local inference with open-source models (WebGPU)
-  - `built-in-ai/transformers` - Transformers.js local inference with HuggingFace models
-- **Smart Auto-Selection**: Automatically tries `built-in-ai/core` → `built-in-ai/webllm` → `built-in-ai/transformers` with graceful fallback if initialization fails
+  - `browser-ai/core` - Chrome/Edge Prompt API (Gemini Nano, Phi-4 Mini)
+  - `browser-ai/webllm` - WebLLM local inference with open-source models (WebGPU)
+  - `browser-ai/transformers` - Transformers.js local inference with HuggingFace models
+- **Smart Auto-Selection**: Automatically tries `browser-ai/core` → `browser-ai/webllm` → `browser-ai/transformers` with graceful fallback if initialization fails
 - **Dynamic Model Listing**: Fetches available WebLLM models dynamically from `prebuiltAppConfig`
 - **Model Filtering**: Filter by name pattern, low-resource, or VRAM requirements
 - **Download Progress**: Shows model download progress during WebLLM model loading
@@ -33,32 +33,32 @@ pip install -e .
 
 By default, the kernel auto-selects a local AI provider with fallback:
 
-1. **built-in-ai/core** (preferred): Chrome/Edge built-in AI using Gemini Nano or Phi-4 Mini
+1. **browser-ai/core** (preferred): Chrome/Edge browser AI using Gemini Nano or Phi-4 Mini
    - Requires enabling in `chrome://flags` or `edge://flags`
    - Model: `text` (only option)
 
-2. **built-in-ai/webllm** (first fallback): Local inference via WebGPU
+2. **browser-ai/webllm** (first fallback): Local inference via WebGPU
    - Requires WebGPU-enabled browser
    - Many models available (Llama, Qwen, Phi, SmolLM, etc.)
 
-3. **built-in-ai/transformers** (second fallback): Local inference with Transformers.js
+3. **browser-ai/transformers** (second fallback): Local inference with Transformers.js
    - Works in modern browsers with WASM support
    - HuggingFace models (Qwen, Llama, Phi, SmolLM, etc.)
 
 No API key needed!
 
 ```python
-# Using Chrome/Edge Built-in AI (if enabled)
-%chat provider built-in-ai/core
+# Using Chrome/Edge Browser AI (if enabled)
+%chat provider browser-ai/core
 %chat model text
 Hello! How are you?
 
 # Or use WebLLM for local inference with open-source models
-%chat provider built-in-ai/webllm
+%chat provider browser-ai/webllm
 %chat model SmolLM2-360M-Instruct-q4f16_1-MLC
 
 # Or use Transformers.js for local inference with HuggingFace models
-%chat provider built-in-ai/transformers
+%chat provider browser-ai/transformers
 %chat model HuggingFaceTB/SmolLM2-360M-Instruct
 ```
 
@@ -69,19 +69,19 @@ Hello! How are you?
 %chat list
 
 # List WebLLM models
-%chat list built-in-ai/webllm
+%chat list browser-ai/webllm
 
 # List Transformers.js models
-%chat list built-in-ai/transformers
+%chat list browser-ai/transformers
 
 # Filter models by name pattern
-%chat list built-in-ai/webllm --filter llama
+%chat list browser-ai/webllm --filter llama
 
 # Show only low-resource models (good for limited VRAM)
-%chat list built-in-ai/webllm --low-resource
+%chat list browser-ai/webllm --low-resource
 
 # Combine filters
-%chat list built-in-ai/webllm --filter qwen --low-resource
+%chat list browser-ai/webllm --filter qwen --low-resource
 ```
 
 Model listings show VRAM requirements (e.g., `[1500 MB]`) to help you choose.
@@ -120,7 +120,7 @@ Or still use magic commands as shown above.
 
 ### Magic Commands
 
-- `%chat provider <name>` - Set the provider (built-in-ai/core, built-in-ai/webllm, openai, etc.)
+- `%chat provider <name>` - Set the provider (browser-ai/core, browser-ai/webllm, openai, etc.)
 - `%chat model <name>` - Set the model (provider-specific)
 - `%chat key <api-key>` - Set API key for current provider
 - `%chat list` - List available providers
@@ -132,18 +132,18 @@ Or still use magic commands as shown above.
 
 ### Supported Providers
 
-- **built-in-ai/core**: Chrome/Edge Prompt API (default, no API key needed)
+- **browser-ai/core**: Chrome/Edge Prompt API (default, no API key needed)
   - Model: `text` (Gemini Nano or Phi-4 Mini depending on browser)
   - Requires flag enabled in browser settings
   
-- **built-in-ai/transformers**: Transformers.js local inference (first fallback, no API key needed)
+- **browser-ai/transformers**: Transformers.js local inference (first fallback, no API key needed)
   - HuggingFace models: Qwen2.5, Llama-3.2, Phi-3.5, SmolLM2, etc.
-  - Use `%chat list built-in-ai/transformers` to see available models
+  - Use `%chat list browser-ai/transformers` to see available models
   - Works in modern browsers with WASM support
   
-- **built-in-ai/webllm**: WebLLM local inference (second fallback, no API key needed)
+- **browser-ai/webllm**: WebLLM local inference (second fallback, no API key needed)
   - Many models: Llama-3.2, Qwen2.5, Phi-3.5, SmolLM2, etc.
-  - Use `%chat list built-in-ai/webllm` to see all available models
+  - Use `%chat list browser-ai/webllm` to see all available models
   - Requires WebGPU-enabled browser
   
 - **openai**: OpenAI models (requires API key)

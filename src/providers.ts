@@ -1,6 +1,6 @@
 // src/providers.ts
 // Provider factory functions for AI SDK
-// Supports built-in-ai/core (Chrome/Edge Prompt API) and built-in-ai/webllm (WebLLM) as separate providers
+// Supports browser-ai/core (Chrome/Edge Prompt API) and browser-ai/webllm (WebLLM) as separate providers
 
 import { type LanguageModel } from 'ai';
 
@@ -100,7 +100,7 @@ async function getSharedWebLLMInstance(
   console.info(`[providers] Initializing new shared WebLLM instance for ${modelId}...`);
   
   const initPromise = (async () => {
-    const { webLLM } = await import('@built-in-ai/web-llm');
+    const { webLLM } = await import('@browser-ai/web-llm');
     const model = webLLM(modelId);
 
     // Check availability and potentially download
@@ -212,29 +212,29 @@ export function getWebLLMPoolStatus(): { modelId: string; refCount: number; last
 // ============================================================================
 
 /**
- * Check if Chrome/Edge Built-in AI Prompt API is available
+ * Check if Chrome/Edge Browser AI Prompt API is available
  */
 export async function isBuiltInAICoreSupported(): Promise<ProviderSupport> {
-  const cached = providerSupportCache.get('built-in-ai/core');
+  const cached = providerSupportCache.get('browser-ai/core');
   if (cached) return cached;
 
   try {
-    const { doesBrowserSupportBuiltInAI } = await import('@built-in-ai/core');
+    const { doesBrowserSupportBuiltInAI } = await import('@browser-ai/core');
     const supported = doesBrowserSupportBuiltInAI();
     const result: ProviderSupport = {
       supported,
-      reason: supported ? undefined : 'Chrome/Edge Built-in AI not available. Enable in chrome://flags or edge://flags'
+      reason: supported ? undefined : 'Chrome/Edge Browser AI not available. Enable in chrome://flags or edge://flags'
     };
-    providerSupportCache.set('built-in-ai/core', result);
-    console.debug('[providers] built-in-ai/core support:', result);
+    providerSupportCache.set('browser-ai/core', result);
+    console.debug('[providers] browser-ai/core support:', result);
     return result;
   } catch (error) {
     const result: ProviderSupport = {
       supported: false,
-      reason: `Failed to check built-in AI support: ${error}`
+      reason: `Failed to check browser AI support: ${error}`
     };
-    providerSupportCache.set('built-in-ai/core', result);
-    console.warn('[providers] built-in-ai/core check failed:', error);
+    providerSupportCache.set('browser-ai/core', result);
+    console.warn('[providers] browser-ai/core check failed:', error);
     return result;
   }
 }
@@ -243,26 +243,26 @@ export async function isBuiltInAICoreSupported(): Promise<ProviderSupport> {
  * Check if Transformers.js is available
  */
 export async function isTransformersSupported(): Promise<ProviderSupport> {
-  const cached = providerSupportCache.get('built-in-ai/transformers');
+  const cached = providerSupportCache.get('browser-ai/transformers');
   if (cached) return cached;
 
   try {
-    const { doesBrowserSupportTransformersJS } = await import('@built-in-ai/transformers-js');
+    const { doesBrowserSupportTransformersJS } = await import('@browser-ai/transformers-js');
     const supported = doesBrowserSupportTransformersJS();
     const result: ProviderSupport = {
       supported,
       reason: supported ? undefined : 'Transformers.js not available in this browser'
     };
-    providerSupportCache.set('built-in-ai/transformers', result);
-    console.debug('[providers] built-in-ai/transformers support:', result);
+    providerSupportCache.set('browser-ai/transformers', result);
+    console.debug('[providers] browser-ai/transformers support:', result);
     return result;
   } catch (error) {
     const result: ProviderSupport = {
       supported: false,
       reason: `Failed to check Transformers support: ${error}`
     };
-    providerSupportCache.set('built-in-ai/transformers', result);
-    console.warn('[providers] built-in-ai/transformers check failed:', error);
+    providerSupportCache.set('browser-ai/transformers', result);
+    console.warn('[providers] browser-ai/transformers check failed:', error);
     return result;
   }
 }
@@ -271,26 +271,26 @@ export async function isTransformersSupported(): Promise<ProviderSupport> {
  * Check if WebLLM (WebGPU) is available
  */
 export async function isWebLLMSupported(): Promise<ProviderSupport> {
-  const cached = providerSupportCache.get('built-in-ai/webllm');
+  const cached = providerSupportCache.get('browser-ai/webllm');
   if (cached) return cached;
 
   try {
-    const { doesBrowserSupportWebLLM } = await import('@built-in-ai/web-llm');
+    const { doesBrowserSupportWebLLM } = await import('@browser-ai/web-llm');
     const supported = doesBrowserSupportWebLLM();
     const result: ProviderSupport = {
       supported,
       reason: supported ? undefined : 'WebGPU not available in this browser'
     };
-    providerSupportCache.set('built-in-ai/webllm', result);
-    console.debug('[providers] built-in-ai/webllm support:', result);
+    providerSupportCache.set('browser-ai/webllm', result);
+    console.debug('[providers] browser-ai/webllm support:', result);
     return result;
   } catch (error) {
     const result: ProviderSupport = {
       supported: false,
       reason: `Failed to check WebLLM support: ${error}`
     };
-    providerSupportCache.set('built-in-ai/webllm', result);
-    console.warn('[providers] built-in-ai/webllm check failed:', error);
+    providerSupportCache.set('browser-ai/webllm', result);
+    console.warn('[providers] browser-ai/webllm check failed:', error);
     return result;
   }
 }
@@ -300,11 +300,11 @@ export async function isWebLLMSupported(): Promise<ProviderSupport> {
  */
 export async function checkProviderSupport(providerName: string): Promise<ProviderSupport> {
   switch (providerName) {
-    case 'built-in-ai/core':
+    case 'browser-ai/core':
       return await isBuiltInAICoreSupported();
-    case 'built-in-ai/transformers':
+    case 'browser-ai/transformers':
       return await isTransformersSupported();
-    case 'built-in-ai/webllm':
+    case 'browser-ai/webllm':
       return await isWebLLMSupported();
     case 'openai':
     case 'anthropic':
@@ -318,27 +318,27 @@ export async function checkProviderSupport(providerName: string): Promise<Provid
 
 /**
  * Auto-select the best available local provider
- * Returns 'built-in-ai/core' if available, else 'built-in-ai/webllm' if WebGPU available, else 'built-in-ai/transformers', else null
+ * Returns 'browser-ai/core' if available, else 'browser-ai/webllm' if WebGPU available, else 'browser-ai/transformers', else null
  * Note: This only checks if the browser APIs are present, not if initialization will succeed.
  * Actual initialization may still fail and require fallback.
  */
 export async function autoSelectLocalProvider(): Promise<string | null> {
   const coreSupport = await isBuiltInAICoreSupported();
   if (coreSupport.supported) {
-    console.info('[providers] Auto-selected built-in-ai/core');
-    return 'built-in-ai/core';
+    console.info('[providers] Auto-selected browser-ai/core');
+    return 'browser-ai/core';
   }
 
   const webllmSupport = await isWebLLMSupported();
   if (webllmSupport.supported) {
-    console.info('[providers] Auto-selected built-in-ai/webllm (fallback from core)');
-    return 'built-in-ai/webllm';
+    console.info('[providers] Auto-selected browser-ai/webllm (fallback from core)');
+    return 'browser-ai/webllm';
   }
 
   const transformersSupport = await isTransformersSupported();
   if (transformersSupport.supported) {
-    console.info('[providers] Auto-selected built-in-ai/transformers (fallback from webllm)');
-    return 'built-in-ai/transformers';
+    console.info('[providers] Auto-selected browser-ai/transformers (fallback from webllm)');
+    return 'browser-ai/transformers';
   }
 
   console.warn('[providers] No local provider available');
@@ -350,7 +350,7 @@ export async function autoSelectLocalProvider(): Promise<string | null> {
  * Used when initialization fails even though browser support check passed
  */
 export function getNextFallbackProvider(failedProvider: string): string | null {
-  const fallbackOrder = ['built-in-ai/core', 'built-in-ai/webllm', 'built-in-ai/transformers'];
+  const fallbackOrder = ['browser-ai/core', 'browser-ai/webllm', 'browser-ai/transformers'];
   const currentIndex = fallbackOrder.indexOf(failedProvider);
   if (currentIndex >= 0 && currentIndex < fallbackOrder.length - 1) {
     return fallbackOrder[currentIndex + 1];
@@ -381,7 +381,7 @@ export async function getWebLLMModels(): Promise<ModelInfo[]> {
         displayName: m.model_id,
         vramMB: m.vram_required_MB,
         lowResource: m.low_resource_required ?? false,
-        provider: 'built-in-ai/webllm'
+        provider: 'browser-ai/webllm'
       }));
 
     webllmModelsCache = models;
@@ -391,9 +391,9 @@ export async function getWebLLMModels(): Promise<ModelInfo[]> {
     console.error('[providers] Failed to load WebLLM models:', error);
     // Return minimal fallback list
     const fallback: ModelInfo[] = [
-      { id: 'SmolLM2-360M-Instruct-q4f16_1-MLC', displayName: 'SmolLM2-360M-Instruct', vramMB: 500, lowResource: true, provider: 'built-in-ai/webllm' },
-      { id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', displayName: 'Llama-3.2-1B-Instruct', vramMB: 1000, lowResource: true, provider: 'built-in-ai/webllm' },
-      { id: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', displayName: 'Qwen2.5-0.5B-Instruct', vramMB: 600, lowResource: true, provider: 'built-in-ai/webllm' },
+      { id: 'SmolLM2-360M-Instruct-q4f16_1-MLC', displayName: 'SmolLM2-360M-Instruct', vramMB: 500, lowResource: true, provider: 'browser-ai/webllm' },
+      { id: 'Llama-3.2-1B-Instruct-q4f16_1-MLC', displayName: 'Llama-3.2-1B-Instruct', vramMB: 1000, lowResource: true, provider: 'browser-ai/webllm' },
+      { id: 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC', displayName: 'Qwen2.5-0.5B-Instruct', vramMB: 600, lowResource: true, provider: 'browser-ai/webllm' },
     ];
     webllmModelsCache = fallback;
     return fallback;
@@ -443,29 +443,29 @@ export async function getProviderModels(
     let models: ModelInfo[];
 
     switch (providerName) {
-      case 'built-in-ai/core': {
-        // Chrome/Edge built-in AI has a single model
+      case 'browser-ai/core': {
+        // Chrome/Edge browser AI has a single model
         models = [{
           id: 'text',
-          displayName: 'Built-in AI (Gemini Nano / Phi-4 Mini)',
-          provider: 'built-in-ai/core'
+          displayName: 'Browser AI (Gemini Nano / Phi-4 Mini)',
+          provider: 'browser-ai/core'
         }];
         break;
       }
 
-      case 'built-in-ai/transformers': {
+      case 'browser-ai/transformers': {
         // Transformers.js supports many models from HuggingFace
         // List some common small models suitable for browser inference
         models = [
-          { id: 'onnx-community/Qwen2.5-0.5B-Instruct', displayName: 'Qwen2.5 0.5B Instruct', provider: 'built-in-ai/transformers' },
-          { id: 'onnx-community/Llama-3.2-1B-Instruct', displayName: 'Llama 3.2 1B Instruct', provider: 'built-in-ai/transformers' },
-          { id: 'onnx-community/Phi-3.5-mini-instruct', displayName: 'Phi-3.5 Mini Instruct', provider: 'built-in-ai/transformers' },
-          { id: 'HuggingFaceTB/SmolLM2-360M-Instruct', displayName: 'SmolLM2 360M Instruct', provider: 'built-in-ai/transformers' },
+          { id: 'onnx-community/Qwen2.5-0.5B-Instruct', displayName: 'Qwen2.5 0.5B Instruct', provider: 'browser-ai/transformers' },
+          { id: 'onnx-community/Llama-3.2-1B-Instruct', displayName: 'Llama 3.2 1B Instruct', provider: 'browser-ai/transformers' },
+          { id: 'onnx-community/Phi-3.5-mini-instruct', displayName: 'Phi-3.5 Mini Instruct', provider: 'browser-ai/transformers' },
+          { id: 'HuggingFaceTB/SmolLM2-360M-Instruct', displayName: 'SmolLM2 360M Instruct', provider: 'browser-ai/transformers' },
         ];
         break;
       }
 
-      case 'built-in-ai/webllm': {
+      case 'browser-ai/webllm': {
         models = await getWebLLMModels();
         break;
       }
@@ -525,11 +525,11 @@ export async function getProviderModels(
  */
 export async function getDefaultModel(providerName: string): Promise<string> {
   switch (providerName) {
-    case 'built-in-ai/core':
-      return 'text'; // Single model for built-in AI
-    case 'built-in-ai/transformers':
+    case 'browser-ai/core':
+      return 'text'; // Single model for browser AI
+    case 'browser-ai/transformers':
       return 'HuggingFaceTB/SmolLM2-360M-Instruct'; // Smallest efficient model
-    case 'built-in-ai/webllm': {
+    case 'browser-ai/webllm': {
       // Return smallest low-resource model
       const models = await getWebLLMModels();
       const lowResource = models.filter(m => m.lowResource).sort((a, b) => (a.vramMB || 0) - (b.vramMB || 0));
@@ -559,22 +559,22 @@ export async function getModelAvailability(
 ): Promise<ModelAvailability> {
   try {
     switch (providerName) {
-      case 'built-in-ai/core': {
-        const { builtInAI } = await import('@built-in-ai/core');
+      case 'browser-ai/core': {
+        const { builtInAI } = await import('@browser-ai/core');
         const model = builtInAI();
         const status = await model.availability();
         return { status: status as ModelAvailability['status'] };
       }
 
-      case 'built-in-ai/transformers': {
-        const { transformersJS } = await import('@built-in-ai/transformers-js');
+      case 'browser-ai/transformers': {
+        const { transformersJS } = await import('@browser-ai/transformers-js');
         const model = transformersJS(modelId);
         const status = await model.availability();
         return { status: status as ModelAvailability['status'] };
       }
 
-      case 'built-in-ai/webllm': {
-        const { webLLM } = await import('@built-in-ai/web-llm');
+      case 'browser-ai/webllm': {
+        const { webLLM } = await import('@browser-ai/web-llm');
         const model = webLLM(modelId);
         const status = await model.availability();
         return { status: status as ModelAvailability['status'] };
@@ -600,33 +600,33 @@ export async function getModelAvailability(
 // ============================================================================
 
 /**
- * Create a built-in-ai/core provider instance
+ * Create a browser-ai/core provider instance
  */
 export async function createBuiltInAICoreProvider(
   onProgress?: (report: ProgressReport) => void
 ): Promise<LanguageModel> {
-  console.info('[providers] Creating built-in-ai/core provider');
+  console.info('[providers] Creating browser-ai/core provider');
   
   const support = await isBuiltInAICoreSupported();
   if (!support.supported) {
-    throw new Error(`built-in-ai/core not available: ${support.reason}`);
+    throw new Error(`browser-ai/core not available: ${support.reason}`);
   }
 
-  const { builtInAI } = await import('@built-in-ai/core');
+  const { builtInAI } = await import('@browser-ai/core');
   const model = builtInAI();
 
   // Check availability and potentially download
   const availability = await model.availability();
-  console.debug('[providers] built-in-ai/core availability:', availability);
+  console.debug('[providers] browser-ai/core availability:', availability);
 
   if (availability === 'unavailable') {
-    throw new Error('Built-in AI model is unavailable in this browser');
+    throw new Error('Browser AI model is unavailable in this browser');
   }
 
   if (availability === 'downloadable' || availability === 'downloading') {
-    console.info('[providers] Downloading built-in AI model...');
+    console.info('[providers] Downloading browser AI model...');
     if (onProgress) {
-      onProgress({ progress: 0, text: 'Downloading built-in AI model...' });
+      onProgress({ progress: 0, text: 'Downloading browser AI model...' });
     }
     
     await model.createSessionWithProgress((progress: number) => {
@@ -644,20 +644,20 @@ export async function createBuiltInAICoreProvider(
 }
 
 /**
- * Create a built-in-ai/transformers provider instance
+ * Create a browser-ai/transformers provider instance
  */
 export async function createTransformersProvider(
   modelId: string,
   onProgress?: (report: ProgressReport) => void
 ): Promise<LanguageModel> {
-  console.info(`[providers] Creating built-in-ai/transformers provider with model: ${modelId}`);
+  console.info(`[providers] Creating browser-ai/transformers provider with model: ${modelId}`);
   
   const support = await isTransformersSupported();
   if (!support.supported) {
-    throw new Error(`built-in-ai/transformers not available: ${support.reason}`);
+    throw new Error(`browser-ai/transformers not available: ${support.reason}`);
   }
 
-  const { transformersJS } = await import('@built-in-ai/transformers-js');
+  const { transformersJS } = await import('@browser-ai/transformers-js');
   const model = transformersJS(modelId);
 
   // Check availability and potentially download
@@ -694,7 +694,7 @@ export async function createTransformersProvider(
 }
 
 /**
- * Create a built-in-ai/webllm provider instance.
+ * Create a browser-ai/webllm provider instance.
  * Uses shared engine pool to avoid loading the same model multiple times.
  * Returns the model ID so the caller can release it later.
  */
@@ -702,11 +702,11 @@ export async function createWebLLMProvider(
   modelId: string,
   onProgress?: (report: ProgressReport) => void
 ): Promise<{ model: LanguageModel; modelId: string }> {
-  console.info(`[providers] Creating built-in-ai/webllm provider with model: ${modelId}`);
+  console.info(`[providers] Creating browser-ai/webllm provider with model: ${modelId}`);
   
   const support = await isWebLLMSupported();
   if (!support.supported) {
-    throw new Error(`built-in-ai/webllm not available: ${support.reason}`);
+    throw new Error(`browser-ai/webllm not available: ${support.reason}`);
   }
 
   // Use shared instance pool
@@ -737,13 +737,13 @@ export async function createProvider(
   
   try {
     switch (providerName) {
-      case 'built-in-ai/core':
+      case 'browser-ai/core':
         return { model: await createBuiltInAICoreProvider(onProgress) };
 
-      case 'built-in-ai/transformers':
+      case 'browser-ai/transformers':
         return { model: await createTransformersProvider(modelName, onProgress) };
 
-      case 'built-in-ai/webllm': {
+      case 'browser-ai/webllm': {
         const result = await createWebLLMProvider(modelName, onProgress);
         return { model: result.model, webllmModelId: result.modelId };
       }
@@ -767,7 +767,7 @@ export async function createProvider(
       }
 
       default:
-        throw new Error(`Unknown provider: ${providerName}. Supported: built-in-ai/core, built-in-ai/transformers, built-in-ai/webllm, openai, anthropic, google`);
+        throw new Error(`Unknown provider: ${providerName}. Supported: browser-ai/core, browser-ai/transformers, browser-ai/webllm, openai, anthropic, google`);
     }
   } catch (error: any) {
     console.error(`[providers] Failed to create provider ${providerName}:`, error);
@@ -804,5 +804,5 @@ export function formatModelInfo(model: ModelInfo): string {
  * Get all supported provider names
  */
 export function getAllProviderNames(): string[] {
-  return ['built-in-ai/core', 'built-in-ai/transformers', 'built-in-ai/webllm', 'openai', 'anthropic', 'google'];
+  return ['browser-ai/core', 'browser-ai/transformers', 'browser-ai/webllm', 'openai', 'anthropic', 'google'];
 }

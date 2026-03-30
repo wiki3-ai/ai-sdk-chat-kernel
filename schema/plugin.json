@@ -21,19 +21,19 @@
     "defaultProvider": {
       "type": "string",
       "title": "Default Provider",
-      "description": "The AI provider to use. Leave empty for auto-selection. Options: 'built-in-ai/core' (Chrome/Edge Prompt API), 'built-in-ai/webllm' (WebLLM local inference), 'built-in-ai/transformers' (Transformers.js local inference), 'openai', 'anthropic', 'google'. Auto-select will try core → webllm → transformers in order.",
+      "description": "The AI provider to use. Leave empty for auto-selection. Options: 'browser-ai/core' (Chrome/Edge Prompt API), 'browser-ai/webllm' (WebLLM local inference), 'browser-ai/transformers' (Transformers.js local inference), 'openai', 'anthropic', 'google'. Auto-select will try core → webllm → transformers in order.",
       "default": ""
     },
     "defaultModel": {
       "type": "string",
       "title": "Default Model",
-      "description": "The model to use. For built-in-ai/core: 'text'. For built-in-ai/transformers: HuggingFace model IDs. For built-in-ai/webllm: any model from %chat list. For cloud providers: see provider docs. Use %chat list <provider> to see available models.",
+      "description": "The model to use. For browser-ai/core: 'text'. For browser-ai/transformers: HuggingFace model IDs. For browser-ai/webllm: any model from %chat list. For cloud providers: see provider docs. Use %chat list <provider> to see available models.",
       "default": "text"
     },
     "apiKey": {
       "type": "string",
       "title": "API Key",
-      "description": "API key for cloud providers (OpenAI, Anthropic, Google). Not needed for built-in-ai providers. The key is stored in browser local storage.",
+      "description": "API key for cloud providers (OpenAI, Anthropic, Google). Not needed for browser-ai providers. The key is stored in browser local storage.",
       "default": "",
       "format": "password"
     }

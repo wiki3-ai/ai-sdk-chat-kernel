@@ -524,7 +524,7 @@ const container = {
             providerName = await autoSelectLocalProvider();
             
             if (!providerName) {
-              throw new Error('No local AI provider available.\n\nOptions:\n1. Enable Chrome/Edge Built-in AI in browser flags\n2. Use a browser with WebGPU support for WebLLM\n3. Configure a cloud provider with %chat provider openai --key');
+              throw new Error('No local AI provider available.\n\nOptions:\n1. Enable Chrome/Edge Browser AI in browser flags\n2. Use a browser with WebGPU support for WebLLM\n3. Configure a cloud provider with %chat provider openai --key');
             }
 
             // Try providers with fallback
@@ -1041,16 +1041,16 @@ const container = {
   %chat help                      - Show this help message
 
 Examples:
-  %chat provider built-in-ai/core
-  %chat provider built-in-ai/webllm
-  %chat list built-in-ai/webllm --filter llama
+  %chat provider browser-ai/core
+  %chat provider browser-ai/webllm
+  %chat list browser-ai/webllm --filter llama
   %chat mcp enable wiki-query     (enables Wikipedia fetching tools)
   %chat provider openai --key     (prompts securely for key)
   %chat model gpt-4o-mini
 
 Note: 
-- 'built-in-ai/core' uses Chrome/Edge Built-in AI (Gemini Nano/Phi-4 Mini)
-- 'built-in-ai/webllm' uses WebLLM for local inference via WebGPU
+- 'browser-ai/core' uses Chrome/Edge Browser AI (Gemini Nano/Phi-4 Mini)
+- 'browser-ai/webllm' uses WebLLM for local inference via WebGPU
 - Use '%chat mcp enable wiki-query' to let the AI fetch Wikipedia content
 - API keys can be set in Settings > AI SDK Chat Kernel
 - Use '%chat key' or '--key' to enter keys via secure dialog`;
@@ -1102,7 +1102,7 @@ Note:
                   }
                   
                   // Add helpful notes
-                  if (specificProvider === 'built-in-ai/webllm') {
+                  if (specificProvider === 'browser-ai/webllm') {
                     output += '\nTip: Use --low-resource to show models for mobile/low-end devices\n';
                     output += 'Tip: Use --filter <name> to search (e.g., --filter llama)\n';
                   }
@@ -1152,8 +1152,8 @@ Note:
                 
                 output += "Use '%chat list <provider>' to see models for a specific provider.\n";
                 output += "\nExamples:\n";
-                output += "  %chat list built-in-ai/webllm\n";
-                output += "  %chat list built-in-ai/webllm --low-resource\n";
+                output += "  %chat list browser-ai/webllm\n";
+                output += "  %chat list browser-ai/webllm --low-resource\n";
                 output += "  %chat provider openai --key\n";
                 
                 return output;
@@ -1192,7 +1192,7 @@ Note:
                   const defModel = await getDefaultModelFromSettings(defProvider);
                   status += `\n\nDefaults from settings:\n  Provider: ${defProvider}\n  Model: ${defModel}`;
                 } else {
-                  status += `\n\nNo provider configured - will auto-select on first use.\nAuto-select order: built-in-ai/core → built-in-ai/webllm → built-in-ai/transformers`;
+                  status += `\n\nNo provider configured - will auto-select on first use.\nAuto-select order: browser-ai/core → browser-ai/webllm → browser-ai/transformers`;
                 }
               }
               
@@ -1759,7 +1759,7 @@ Currently enabled: ${total} tools from ${packs.length} pack(s)`;
             this.node.classList.remove('lm-mod-hidden');
             this.spinner.style.display = 'inline-block';
             this.cancelBtn.style.display = 'inline-block';
-            this.messageSpan.textContent = 'Streaming...';
+            this.messageSpan.textContent = 'Processing...';
             this.node.classList.remove('ai-status-error');
           }
 
@@ -1911,10 +1911,18 @@ Currently enabled: ${total} tools from ${packs.length} pack(s)`;
               const { Kernel } = sessionModule;
               
               // Function to set up comm listening on a kernel
+              // Track which kernels already have comm target registered
+              const registeredKernels = new Set<string>();
+
               const setupKernelCommListener = (kernel: any) => {
                 if (!kernel) return;
+
+                // Idempotent: skip if already registered
+                const kid = kernel.id || kernel.clientId;
+                if (kid && registeredKernels.has(kid)) return;
+                if (kid) registeredKernels.add(kid);
                 
-                console.log('[progress-ui] Setting up comm listener for kernel:', kernel.id);
+                console.log('[progress-ui] Setting up comm listener for kernel:', kid);
                 
                 // Register handler for our comm target
                 kernel.registerCommTarget(PROGRESS_COMM_TARGET, (comm: any, openMsg: any) => {
@@ -1960,15 +1968,27 @@ Currently enabled: ${total} tools from ${packs.length} pack(s)`;
                 });
               };
 
-              // Try to get notebook tracker to monitor kernels
+              // Discover and register comm target on all currently-running kernels
+              const registerOnRunningKernels = (tracker: any) => {
+                let count = 0;
+                try {
+                  const running = tracker.running();
+                  for (const model of running) {
+                    const session = tracker.connectTo({ model });
+                    if (session?.kernel) {
+                      setupKernelCommListener(session.kernel);
+                      count++;
+                    }
+                  }
+                } catch (_e) { /* iterator may not be available yet */ }
+                return count;
+              };
+
+              // Try to get session tracker and register on kernels
               try {
-                const notebookModule = await importShared('@jupyterlab/notebook');
-                const { INotebookTracker } = notebookModule;
-                
-                // This will be called when a notebook kernel changes
                 const tracker = app.serviceManager?.sessions;
                 if (tracker) {
-                  // Listen for session changes
+                  // 1. Listen for future session changes
                   tracker.runningChanged?.connect((_sender: any, models: any) => {
                     for (const model of models) {
                       const session = tracker.connectTo({ model });
@@ -1977,9 +1997,26 @@ Currently enabled: ${total} tools from ${packs.length} pack(s)`;
                       }
                     }
                   });
+
+                  // 2. Eagerly discover existing sessions
+                  registerOnRunningKernels(tracker);
+
+                  // 3. Refresh session list to trigger runningChanged for any we missed
+                  tracker.refreshRunning?.();
+
+                  // 4. Poll a few times to catch kernels starting during activation
+                  const delays = [500, 1500, 3000];
+                  for (const delay of delays) {
+                    setTimeout(() => {
+                      const found = registerOnRunningKernels(tracker);
+                      if (found > 0) {
+                        console.log(`[progress-ui] Late discovery: registered ${found} kernel(s) after ${delay}ms`);
+                      }
+                    }, delay);
+                  }
                 }
               } catch (e) {
-                console.log('[progress-ui] Could not set up notebook tracking:', e);
+                console.log('[progress-ui] Could not set up session tracking:', e);
               }
 
               console.log('[progress-ui] Progress UI extension activated');

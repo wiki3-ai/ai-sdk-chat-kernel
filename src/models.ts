@@ -1,6 +1,6 @@
 // src/models.ts
 // Provider and model configuration for AI SDK
-// Supports built-in-ai/core (Chrome/Edge Prompt API) and built-in-ai/webllm (WebLLM) as separate providers
+// Supports browser-ai/core (Chrome/Edge Prompt API) and browser-ai/webllm (WebLLM) as separate providers
 
 export interface ProviderFactoryOptions {
   apiKey?: string;
@@ -22,22 +22,22 @@ const providerRegistry: Map<string, ProviderConfig> = new Map();
 
 // Default provider suggestions (order matters for auto-selection fallback)
 export const SUGGESTED_PROVIDERS: Record<string, ProviderConfig> = {
-  'built-in-ai/core': {
-    name: 'built-in-ai/core',
-    displayName: 'Built-in AI (Chrome/Edge)',
+  'browser-ai/core': {
+    name: 'browser-ai/core',
+    displayName: 'Browser AI (Chrome/Edge)',
     requiresApiKey: false,
     isBuiltIn: true,
-    description: 'Chrome/Edge built-in AI using Gemini Nano or Phi-4 Mini',
+    description: 'Chrome/Edge browser AI using Gemini Nano or Phi-4 Mini',
   },
-  'built-in-ai/webllm': {
-    name: 'built-in-ai/webllm',
+  'browser-ai/webllm': {
+    name: 'browser-ai/webllm',
     displayName: 'WebLLM (Local)',
     requiresApiKey: false,
     isBuiltIn: true,
     description: 'Local inference via WebGPU with open-source models',
   },
-  'built-in-ai/transformers': {
-    name: 'built-in-ai/transformers',
+  'browser-ai/transformers': {
+    name: 'browser-ai/transformers',
     displayName: 'Transformers.js (Local)',
     requiresApiKey: false,
     isBuiltIn: true,
